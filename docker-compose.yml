@@ -1,0 +1,32 @@
+# DNSMAQ-MGR — dnsmasq + web manager in one container.
+#
+# DEFAULT: host networking. DHCP (and PXE) depend on receiving L2 broadcasts
+# on UDP 67; Docker's bridge NAT never delivers those to a port-mapped
+# container, so bridge mode can only do DNS + the web UI.
+services:
+  dnsmaq-mgr:
+    build: .
+    image: dnsmaq-mgr
+    container_name: dnsmaq-mgr
+    network_mode: host          # full functionality: DNS + DHCP + TFTP/PXE
+    restart: unless-stopped
+    volumes:
+      - dnsmaq-data:/data
+    # environment:
+    #   DNSMAQ_PORT: "8443"          # web UI port
+    #   DNSMAQ_ADMIN_PASSWORD: ""    # set to skip the generated first-run password
+
+  # ── Bridge-mode variant (DNS + web UI ONLY — no DHCP/PXE) ──────────
+  # dnsmaq-mgr:
+  #   build: .
+  #   image: dnsmaq-mgr
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8443:8443"           # web UI (HTTPS)
+  #     - "53:53/udp"           # DNS
+  #     - "53:53/tcp"
+  #   volumes:
+  #     - dnsmaq-data:/data
+
+volumes:
+  dnsmaq-data:

@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+venv/
+devdata/
+*.log
+auth.json
+history.db*
+certs/
+state/
+render/
+leases/
+.pytest_cache/
+nohup.out
