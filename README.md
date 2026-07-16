@@ -17,6 +17,12 @@ own `dnsmasq.conf` is never touched. Every change is:
    re-read by dnsmasq on SIGHUP (no downtime at all); only structural changes
    (ranges, toggles, global options) restart the service (~100 ms).
 
+![Overview](docs/screenshots/overview.png)
+
+| DNS Overrides | DHCP |
+|---|---|
+| ![DNS](docs/screenshots/dns.png) | ![DHCP](docs/screenshots/dhcp.png) |
+
 ---
 
 ## Features
@@ -137,7 +143,7 @@ are all inside. The app is PID 1 and supervises dnsmasq as a child process
 
 ```bash
 # From the published image:
-docker run -d --name dnsmaq-mgr --network host \
+docker run -d --name dnsmaq-mgr --network host --cap-add NET_ADMIN \
     -v dnsmaq-data:/data ghcr.io/brainchillz/nexus-dnsmasq-mgr:latest
 
 # Or with compose / building yourself:
@@ -153,6 +159,10 @@ mode is fine for a DNS + web-UI-only deployment:
 docker run -d -p 8443:8443 -p 53:53/udp -p 53:53/tcp \
     -v dnsmaq-data:/data ghcr.io/brainchillz/nexus-dnsmasq-mgr:latest
 ```
+
+`--cap-add NET_ADMIN` is required once DHCP is enabled (dnsmasq exits with
+"missing required capability NET_ADMIN" without it); a DNS-only bridge
+deployment runs fine with the default capability set.
 
 All state (accounts, certs, config stores, rendered config, leases, TFTP
 root, stats DB) lives on the `/data` volume — the container is disposable.
