@@ -159,6 +159,20 @@ async function refreshMirrorStatus() {
   return mirrorStatus;
 }
 function sectionLocked(section) { return (mirrorStatus.locked || []).includes(section); }
+function isSecondaryNode() { return Object.keys(mirrorStatus.sources || {}).length > 0; }
+// Reflect secondary/replica status in the sidebar subtitle (visible on every page).
+function applyRoleSubtitle() {
+  const sub = document.querySelector('.sidebar-header .subtitle');
+  if (!sub) return;
+  if (isSecondaryNode()) {
+    const src = Object.keys(mirrorStatus.sources || {}).join(', ');
+    sub.innerHTML = '&#128274; secondary &middot; synced from ' + escapeHtml(src);
+    sub.style.color = 'var(--primary)';
+  } else {
+    sub.textContent = 'dnsmasq management';
+    sub.style.color = '';
+  }
+}
 function lockedBanner(section) {
   if (!sectionLocked(section)) return '';
   let src = '';
@@ -200,12 +214,19 @@ async function page_overview() {
     API.get('/api/dnsmasq/status'),
     API.get('/api/stats/current').catch(() => null),
     currentRole === 'admin' ? API.get('/api/peers').catch(() => null) : null,
+    refreshMirrorStatus(),   // keep the secondary/primary role indicators current
   ]);
   const dns = (cur && cur.dns) || null;
   const dhcp = (cur && cur.dhcp) || { active_leases: 0, pools: [] };
   const peerList = (peers && peers.peers) || [];
   const peerOk = peerList.filter(p => p.last_status === 'ok').length;
   const admin = currentRole === 'admin';
+  // This node is a SECONDARY when it is receiving mirrored config from a
+  // source — its DNS/DHCP pages are locked read-only.
+  const sources = Object.entries(mirrorStatus.sources || {});
+  const isSecondary = sources.length > 0;
+  const srcNames = sources.map(([n]) => n).join(', ');
+  const lastRecv = sources.reduce((m, [, s]) => Math.max(m, s.last_received || 0), 0);
 
   const statusCard = `
     <div class="card">
@@ -246,12 +267,25 @@ async function page_overview() {
       <div id="spark-leases"></div>
     </div>`;
 
-  const peerCard = admin ? `
+  // Mirroring card is role-aware: a secondary shows what it's synced FROM (not
+  // "0 peers"); a primary/standalone shows the mirrors it pushes to.
+  let peerCard = '';
+  if (admin && isSecondary) {
+    peerCard = `
+    <div class="card card-link" onclick="showPage('peers')" style="border-color:var(--primary)">
+      <div class="card-head">Mirroring</div>
+      <div class="card-value" style="font-size:1.3em">&#128274; Secondary</div>
+      <div class="card-sub">synced from <strong>${escapeHtml(srcNames)}</strong></div>
+      <div class="card-sub">${(mirrorStatus.locked || []).length} section(s) read-only${lastRecv ? ' &middot; last ' + fmtTs(lastRecv) : ''}</div>
+    </div>`;
+  } else if (admin) {
+    peerCard = `
     <div class="card card-link" onclick="showPage('peers')">
       <div class="card-head">Mirroring</div>
-      <div class="card-value">${peerList.length}<span class="card-unit">peer${peerList.length === 1 ? '' : 's'}</span></div>
-      <div class="card-sub">${peerList.length ? `${peerOk}/${peerList.length} in sync` : 'no peers configured'}</div>
-    </div>` : '';
+      <div class="card-value">${peerList.length}<span class="card-unit">${peerList.length ? 'mirror' + (peerList.length === 1 ? '' : 's') : 'peers'}</span></div>
+      <div class="card-sub">${peerList.length ? `${peerOk}/${peerList.length} in sync` : 'primary &middot; no mirrors configured'}</div>
+    </div>`;
+  }
 
   const pools = dhcp.pools.length ? `
     <h3>Pool utilization</h3>
@@ -263,8 +297,12 @@ async function page_overview() {
         <div class="card-sub">${escapeHtml(p.start)} – ${escapeHtml(p.end)}</div>
       </div>`).join('')}</div>` : '';
 
+  const secondaryBanner = isSecondary ? `<div class="alert alert-info">&#128274; <strong>Secondary node.</strong>
+    DNS is managed on <strong>${escapeHtml(srcNames)}</strong> and mirrored here read-only — make changes on the primary, not here.</div>` : '';
+
   $('page-content').innerHTML = `
     <h2>Overview</h2>
+    ${secondaryBanner}
     ${st.running ? '' : '<div class="alert alert-warning"><strong>dnsmasq is not running.</strong> Check the Config page for validation errors, or restart it.</div>'}
     <div class="cards">${statusCard}${togglesCard}${dnsCard}${leaseCard}${peerCard}</div>
     ${pools}`;
@@ -313,6 +351,9 @@ async function showApp(user, fqdn, role, mustChange) {
   if (fqdn) $('sidebar-title').textContent = fqdn;
   $('account-user').textContent = user ? `Signed in as ${user}${currentRole !== 'admin' ? ' · read-only' : ''}` : '';
   await refreshMirrorStatus();
+  // Always-visible role cue in the sidebar so a secondary is obvious on every
+  // page the moment you log in — not just the Overview.
+  applyRoleSubtitle();
   showPage('overview');
   if (mustChange) forcePasswordChange();
 }
