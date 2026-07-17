@@ -409,7 +409,7 @@ textarea.form-control {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px; line-height: 1.5; color: var(--text); white-space: pre-wrap; word-break: break-word;
 }
-.spark { display: block; margin: 4px auto 0; opacity: 0.85; }
+.spark { display: block; margin: 4px auto 0; opacity: 0.85; max-width: 100%; }
 .spark svg { display: block; }
 .pool-stats .fc-up { color: var(--red); }
 .pool-stats .fc-flat { color: var(--text-muted); }
