@@ -87,6 +87,32 @@ while a feature is off.
   mirrored*: a standby holds a full copy of the config while staying dark on
   port 67 until you flip its switch yourself.
 
+### UniFi Cloud Gateway sync
+A peer can also be a **UniFi Cloud Gateway** instead of another DNSMAQ-MGR
+node, so the gateway's resolver stays in step with this one. Choose the type
+in *Add peer*; everything else — auto-push on change, Sync now, fingerprint
+pinning, last-sync status — works the same.
+
+- Host records are reconciled against the gateway's **Static DNS** (`A`/`AAAA`
+  only; `CNAME`/`TXT`/`SRV`/`MX` entries there are left untouched). The REST
+  path is discovered at runtime, as it moved between Network versions.
+- Only the **hosts** section applies. UniFi has no analogue for DHCP or
+  netboot, and cannot receive or lock sections, so a gateway peer is
+  push-only and the other sections are hidden.
+- **Full mirror** (default, per-peer): Static DNS entries that aren't in our
+  host records are deleted. A push with zero host records is refused rather
+  than wiping the gateway.
+- **Device Local DNS.** UniFi also keeps a per-client "Local DNS Record" on
+  fixed-IP clients, which shadows Static DNS — creating a static entry for
+  such a name is rejected outright. Those names are reported as conflicts in
+  the peer's status, or, with *take over names*, the client's record is
+  unticked so ours wins. **DHCP reservations are never touched** — only the
+  Local DNS Record flag is sent.
+- Auth is a gateway **username and password** (stored in `peers.json`, mode
+  0600, never echoed back by the API). UniFi's scoped API keys don't reach the
+  Network application's Static DNS endpoint, so there is no token option; use
+  a local admin with MFA disabled, since 2FA logins can't be automated.
+
 ### Web UI & security
 - HTTPS out of the box with a **self-signed certificate generated on first
   boot**; upload your own cert/key (validated: PEM parse + key/cert match) or
@@ -267,10 +293,19 @@ Metrics: `dns_cache_size`, `dns_hits`, `dns_misses`, `dns_insertions`,
 | POST | `/api/peers/<id>` | update peer |
 | DELETE | `/api/peers/<id>` | remove peer |
 | POST | `/api/peers/<id>/sync` | push now |
-| POST | `/api/peers/fetch-fingerprint` | `{url}` → peer cert SHA-256 for pinning |
+| POST | `/api/peers/fetch-fingerprint` | `{url, kind}` → peer cert SHA-256 for pinning (default port 8443, or 443 for `kind: "unifi"`) |
 
-Peer record: `{name, url, token, sections: ["hosts","dns","dhcp","netboot"],
-verify: "system"|"insecure"|"fingerprint:<sha256>", enabled}`.
+Peer record: `{name, url, kind: "dnsmaq"|"unifi", sections:
+["hosts","dns","dhcp","netboot"], verify:
+"system"|"insecure"|"fingerprint:<sha256>", enabled}` plus, by kind:
+
+- `dnsmaq` — `token`
+- `unifi` — `unifi_username`, `unifi_password`, `unifi_site`,
+  `unifi_delete_extra` (full mirror, default true), `unifi_claim_client_dns`
+  (take over names held by a client's Local DNS Record, default false).
+  Sections must be `["hosts"]`.
+
+`token` and `unifi_password` are returned as booleans, never as values.
 
 ### TLS (web UI certificate)
 | Method | Path | Purpose |
