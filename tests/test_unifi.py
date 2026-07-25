@@ -361,6 +361,43 @@ def test_unifi_peer_keeps_password_when_blank_on_edit(client):
     assert load_store('peers')['peers'][0]['unifi_password'] == 'secret'
 
 
+def test_legacy_peer_without_kind_still_works(client, monkeypatch):
+    """Peers written before the UniFi feature have no 'kind'. They must keep
+    pushing over the mirror API, survive an edit, and never touch UniFi code."""
+    from dnsmaqmgr import peers as peers_mod
+    from dnsmaqmgr.core.store import load_store, save_store
+
+    legacy = {'id': 'p_9d8742', 'name': 'silo-55', 'url': 'https://10.0.0.55:9443',
+              'sections': ['hosts', 'dns'], 'verify': 'fingerprint:' + 'a' * 64,
+              'enabled': True, 'token': 'dmm_legacy', 'last_sync': 1784259598,
+              'last_status': 'ok', 'last_serial': 1}
+    save_store('peers', {'peers': [legacy]})
+
+    # Reads default the kind rather than exploding or leaking the token.
+    shown = client.get('/api/peers').json['peers'][0]
+    assert shown['kind'] == 'dnsmaq' and shown['token'] is True
+
+    # Pushes still take the mirror path, not the UniFi one.
+    sent = {}
+    monkeypatch.setattr(peers_mod, '_post_json',
+                        lambda url, path, body, token, verify: (
+                            sent.update(url=url, path=path, token=token) or
+                            (200, {'success': True})))
+    monkeypatch.setattr(peers_mod, '_unifi_client',
+                        lambda peer: (_ for _ in ()).throw(
+                            AssertionError('legacy peer must not use the UniFi path')))
+    assert peers_mod.push_to_peer(legacy, ['hosts']) == 'ok'
+    assert sent['path'] == '/api/mirror/receive' and sent['token'] == 'dmm_legacy'
+
+    # Editing without resending the token keeps it, and pins the kind.
+    assert client.post('/api/peers/p_9d8742', json={
+        'name': 'silo-55', 'url': 'https://10.0.0.55:9443',
+        'sections': ['hosts', 'dns'], 'verify': 'fingerprint:' + 'a' * 64,
+        'enabled': True}).status_code == 200
+    saved = load_store('peers')['peers'][0]
+    assert saved['token'] == 'dmm_legacy' and saved['kind'] == 'dnsmaq'
+
+
 def test_fingerprint_fetch_uses_the_right_default_port():
     """A gateway's API is on 443, not the 8443 a DNSMAQ-MGR peer uses."""
     from dnsmaqmgr.peers import _split_url, default_port_for
