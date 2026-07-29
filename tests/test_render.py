@@ -107,23 +107,23 @@ def test_dhcp_hosts_and_opts_lines():
 
 def test_boot_arch_matching_and_proxy():
     settings = _settings(dhcp_enabled=True)
-    nb = {'tftp_enabled': True, 'tftp_root': '/srv/tftp', 'tftp_secure': True,
-          'proxy_dhcp': True, 'proxy_subnet': '10.0.0.0', 'pxe_prompt': 'Boot me',
+    nb = {'proxy_dhcp': True, 'proxy_subnet': '10.0.0.0', 'pxe_prompt': 'Boot me',
           'entries': [{'id': 'b_1', 'name': 'UEFI x64', 'arches': ['7', '9'],
                        'filename': 'ipxe.efi', 'server': '10.0.0.5', 'enabled': True},
                       {'id': 'b_2', 'name': 'Any', 'arches': [],
-                       'filename': 'undionly.kpxe', 'server': '', 'enabled': True}]}
+                       'filename': 'undionly.kpxe', 'server': '10.0.0.6', 'enabled': True}]}
     text = dm.render_boot(nb, settings)
-    assert 'enable-tftp' in text
-    assert 'tftp-root=/srv/tftp' in text
-    assert 'tftp-secure' in text
+    # No local TFTP server any more.
+    assert 'enable-tftp' not in text and 'tftp-root' not in text and 'tftp-secure' not in text
     assert 'dhcp-match=set:b_1,option:client-arch,7' in text
     assert 'dhcp-match=set:b_1,option:client-arch,9' in text
     assert 'dhcp-boot=tag:b_1,ipxe.efi,,10.0.0.5' in text
-    assert 'dhcp-boot=undionly.kpxe\n' in text
+    assert 'dhcp-boot=undionly.kpxe,,10.0.0.6' in text        # external next-server
     assert 'dhcp-range=10.0.0.0,proxy' in text
     assert 'pxe-prompt="Boot me",3' in text
-    assert 'pxe-service=BC_EFI,"UEFI x64",ipxe.efi' in text
+    # pxe-service now carries the external boot server (no local TFTP fallback).
+    assert '"UEFI x64",ipxe.efi,10.0.0.5' in text
+    assert '"Any",undionly.kpxe,10.0.0.6' in text
 
 
 def test_render_all_validates_with_real_dnsmasq():

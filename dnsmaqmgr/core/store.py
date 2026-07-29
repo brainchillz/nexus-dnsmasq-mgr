@@ -40,8 +40,10 @@ DEFAULTS = {
     },
     'dns': {'serial': 0, 'hosts': [], 'cnames': [], 'addresses': [], 'forwards': []},
     'dhcp': {'serial': 0, 'ranges': [], 'static_leases': [], 'options': []},
-    'netboot': {'serial': 0, 'tftp_enabled': False, 'tftp_root': '', 'tftp_secure': True,
-                'proxy_dhcp': False, 'proxy_subnet': '', 'pxe_prompt': '', 'entries': []},
+    # Boot is DHCP-only now: hand clients a filename + external boot server
+    # (next-server). The app no longer runs a TFTP file server of its own.
+    'netboot': {'serial': 0, 'proxy_dhcp': False, 'proxy_subnet': '',
+                'pxe_prompt': '', 'entries': []},
     'peers': {'peers': []},
     'stats_cursor': {},
 }

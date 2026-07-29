@@ -81,9 +81,13 @@ def test_toggles(client):
 
 def test_netboot_entry(client):
     r = client.post('/api/netboot/entries', json={'name': 'UEFI x64', 'arches': ['7'],
-                                                  'filename': 'ipxe.efi'})
+                                                  'filename': 'ipxe.efi', 'server': '10.0.0.5'})
     assert r.json['success']
     assert client.post('/api/netboot/entries',
-                       json={'name': 'bad', 'filename': '../etc/passwd;x'}).status_code == 400
+                       json={'name': 'bad', 'filename': '../etc/passwd;x',
+                             'server': '10.0.0.5'}).status_code == 400
+    # The boot server (next-server) is now required — there is no local TFTP.
+    assert client.post('/api/netboot/entries',
+                       json={'name': 'noserver', 'filename': 'ipxe.efi'}).status_code == 400
     assert client.post('/api/netboot/settings',
                        json={'proxy_dhcp': True}).status_code == 400  # subnet required

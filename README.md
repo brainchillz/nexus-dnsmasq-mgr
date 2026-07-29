@@ -52,15 +52,19 @@ own `dnsmasq.conf` is never touched. Every change is:
   going live. Two servers on one LAN is always an explicit human decision.
 
 ### Network boot (PXE / UEFI / HTTP)
-- **TFTP server** toggle with configurable root and secure mode.
+DHCP boot options only — the app tells clients *where* to boot from; it does
+**not** run a TFTP server or host boot files. Point entries at your own
+external TFTP/HTTP boot server (next-server).
 - **Boot entries matched on client architecture** (DHCP option 93): serve
   `undionly.kpxe` to BIOS clients and `ipxe.efi` to UEFI x64 in one config;
-  BIOS / EFI32 / EFI64 / ARM32 / ARM64 supported.
+  BIOS / EFI32 / EFI64 / ARM32 / ARM64 supported. Each entry names the boot
+  filename and the boot-server address (`dhcp-boot` next-server).
 - **Proxy-DHCP mode** — supply only the PXE boot information alongside an
-  existing DHCP server that keeps owning leases.
+  existing DHCP server that keeps owning leases; `pxe-service` points at your
+  external boot server.
 
 ### Feature toggles
-DNS, DHCP and TFTP can each be disabled with one switch (DNS off renders
+DNS and DHCP can each be disabled with one switch (DNS off renders
 `port=0`; DHCP off suppresses all `dhcp-*` lines). Configuration is kept
 while a feature is off.
 
@@ -83,7 +87,7 @@ while a feature is off.
   replay/stale-serial protection; per-peer last-sync status.
 - **Mirrored sections become read-only on the receiver** ("Managed by …",
   edits return 409) so the two sides can't drift — **Detach** takes back
-  local control. The DHCP/TFTP *enable toggles are deliberately never
+  local control. The DNS/DHCP *enable toggles are deliberately never
   mirrored*: a standby holds a full copy of the config while staying dark on
   port 67 until you flip its switch yourself.
 
@@ -190,10 +194,10 @@ docker run -d -p 8443:8443 -p 53:53/udp -p 53:53/tcp \
 "missing required capability NET_ADMIN" without it); a DNS-only bridge
 deployment runs fine with the default capability set.
 
-All state (accounts, certs, config stores, rendered config, leases, TFTP
-root, stats DB) lives on the `/data` volume — the container is disposable.
-Set `DNSMAQ_ADMIN_PASSWORD` to skip the generated first-run password, and
-drop TFTP boot files into the volume's `tftp/` directory.
+All state (accounts, certs, config stores, rendered config, leases, stats DB)
+lives on the `/data` volume — the container is disposable. Set
+`DNSMAQ_ADMIN_PASSWORD` to skip the generated first-run password. Boot files
+live on your own external TFTP/HTTP server, not in the container.
 
 ---
 
@@ -250,9 +254,9 @@ static_leases `{mac, ip, hostname?, tag?}` · options `{option, value, tag?}`
 ### Network boot
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/netboot` | TFTP/proxy settings + boot entries |
-| POST | `/api/netboot/settings` | `{tftp_enabled, tftp_root, tftp_secure, proxy_dhcp, proxy_subnet, pxe_prompt}` |
-| POST | `/api/netboot/entries[/<id>]` | add/update entry `{name, arches[], filename, server?}` |
+| GET | `/api/netboot` | proxy settings + boot entries |
+| POST | `/api/netboot/settings` | `{proxy_dhcp, proxy_subnet, pxe_prompt}` |
+| POST | `/api/netboot/entries[/<id>]` | add/update entry `{name, arches[], filename, server}` (server required) |
 | DELETE | `/api/netboot/entries/<id>` | delete entry |
 
 ### Settings, toggles & service
@@ -325,7 +329,7 @@ Environment variables (all optional):
 | `DNSMAQ_PORT` | `8443` | web UI port |
 | `DNSMAQ_TLS` | `1` | HTTPS (0 = plain HTTP behind a reverse proxy) |
 | `DNSMAQ_TLS_CERT` / `_KEY` / `_DIR` | `<data>/certs/…` | certificate paths |
-| `DNSMAQ_DATA_DIR` | app dir | root for state/certs/render/leases/tftp/history |
+| `DNSMAQ_DATA_DIR` | app dir | root for state/certs/render/leases/history |
 | `DNSMAQ_SUPERVISE` | `0` | app supervises a dnsmasq child (Docker mode) |
 | `DNSMAQ_NO_SUDO` | `0` | never prefix sudo (container/root) |
 | `DNSMAQ_ADMIN_PASSWORD` | random | first-run admin password |
@@ -360,7 +364,8 @@ complete mirroring testbed.
 - The web server is Flask's built-in threaded server over TLS — a deliberate
   choice for a LAN admin tool; put a reverse proxy in front for anything
   bigger.
-- TFTP boot files are placed in the TFTP root by hand (no upload UI yet).
+- Boot files are hosted on your own external TFTP/HTTP server; entries just
+  point clients at it (this app serves no files).
 - DHCPv6/RA management is not yet surfaced in the UI (use Extra Options).
 - If other files in `/etc/dnsmasq.d/` set options this app also manages
   (`port=`, `dhcp-range`, `dhcp-leasefile`, `addn-hosts`), review them for

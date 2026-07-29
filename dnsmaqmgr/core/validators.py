@@ -24,7 +24,6 @@ RE_BOOT_FILE = re.compile(r'^[A-Za-z0-9._/-]{1,128}\Z')
 RE_ID = re.compile(r'^[a-z]_[0-9a-f]{6}\Z')
 RE_COMMENT = re.compile(r'^[^\r\n]{0,200}\Z')
 RE_ARCH = re.compile(r'^\d{1,3}\Z')
-RE_PATH = re.compile(r'^/[A-Za-z0-9._/-]{0,200}\Z')
 RE_URL = re.compile(r'^https://[A-Za-z0-9.\[\]:_-]+(:\d{1,5})?\Z')
 RE_FINGERPRINT = re.compile(r'^[0-9a-f]{64}\Z')
 RE_SOURCE = re.compile(r'^[A-Za-z0-9._-]{1,64}\Z')
@@ -65,19 +64,6 @@ def is_upstream(s):
         return (is_ip(host) and port.isascii() and port.isdigit()
                 and 0 < int(port) < 65536)
     return is_ip(s)
-
-
-def valid_tftp_root(s):
-    """An absolute path safe to hand dnsmasq as tftp-root. Empty = app default.
-    Rejects the filesystem root ('/') and any '..' traversal component, so a
-    (possibly mirror-pushed) value cannot turn the box into an open TFTP server
-    for every world-readable file."""
-    s = str(s or '')
-    if not s:
-        return True
-    if not RE_PATH.match(s) or s == '/':
-        return False
-    return '..' not in s.split('/')
 
 
 def valid_hostname_fqdn(s):

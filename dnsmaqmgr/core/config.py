@@ -10,7 +10,7 @@ from datetime import timedelta
 
 # APP_DIR is the directory holding the ROOT app.py entrypoint (the repo root or
 # /opt install dir). DATA_DIR holds all mutable state (auth.json, certs/,
-# state/, render/, leases/, tftp/, history.db) — same as APP_DIR on bare metal,
+# state/, render/, leases/, history.db) — same as APP_DIR on bare metal,
 # a volume (/data) in Docker.
 APP_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STATIC_DIR = os.path.join(APP_DIR, 'static')
@@ -28,7 +28,6 @@ DHCP_HOSTS_FILE = os.path.join(RENDER_DIR, 'dhcp-hosts')
 DHCP_OPTS_FILE = os.path.join(RENDER_DIR, 'dhcp-opts')
 LEASES_DIR = os.path.join(DATA_DIR, 'leases')
 LEASES_FILE = os.path.join(LEASES_DIR, 'dnsmasq.leases')
-TFTP_DIR = os.path.join(DATA_DIR, 'tftp')
 
 
 def env_bool(name, default):
@@ -99,8 +98,8 @@ def write_json_atomic(path, data, mode=0o600):
 
 def write_text_atomic(path, text, mode=0o644):
     """Atomic text-file write, same pattern as write_json_atomic. Rendered
-    dnsmasq config files are world-readable (dnsmasq runs as root but its TFTP
-    child and nobody-user workers must be able to read them)."""
+    dnsmasq config files are world-readable (dnsmasq runs as root but its
+    nobody-user workers must be able to read them)."""
     tmp = '%s.tmp.%d' % (path, os.getpid())
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
@@ -120,16 +119,16 @@ def write_text_atomic(path, text, mode=0o644):
 
 def ensure_dirs():
     """Create the DATA_DIR tree on first boot (bare metal and Docker volume)."""
-    for d in (STATE_DIR, CONF_DIR, HOSTS_DIR, LEASES_DIR, TFTP_DIR, TLS_DIR):
+    for d in (STATE_DIR, CONF_DIR, HOSTS_DIR, LEASES_DIR, TLS_DIR):
         os.makedirs(d, exist_ok=True)
-    # State and certs are private to the app user; render/ and tftp/ must be
-    # readable by dnsmasq (root) and its unprivileged TFTP child.
+    # State and certs are private to the app user; render/ must be readable by
+    # dnsmasq (root).
     for d in (STATE_DIR, TLS_DIR):
         try:
             os.chmod(d, 0o700)
         except OSError:
             pass
-    for d in (RENDER_DIR, CONF_DIR, HOSTS_DIR, LEASES_DIR, TFTP_DIR):
+    for d in (RENDER_DIR, CONF_DIR, HOSTS_DIR, LEASES_DIR):
         try:
             os.chmod(d, 0o755)
         except OSError:

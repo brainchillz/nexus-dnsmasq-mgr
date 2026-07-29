@@ -1,11 +1,12 @@
-"""Network boot: TFTP server, proxy-DHCP, and arch-matched boot entries
-(PXE BIOS / UEFI / HTTP boot via dhcp-match on option:client-arch)."""
+"""Network boot: DHCP boot options and proxy-DHCP with arch-matched entries
+(PXE BIOS / UEFI / HTTP boot via dhcp-match on option:client-arch). Points
+clients at an external boot server (next-server) — the app hosts no TFTP."""
 from flask import Blueprint, jsonify, request
 
 from .core.runcmd import err, json_object
 from .core.store import load_store, save_store, new_id, find_record
 from .core.validators import (RE_ARCH, RE_BOOT_FILE, RE_COMMENT,
-                              is_ipv4, valid_hostname_fqdn, valid_tftp_root)
+                              is_ipv4, valid_hostname_fqdn)
 from .dnsmasq import apply_change, PXE_CSA
 from .mirror import locked_error
 
@@ -25,8 +26,13 @@ def _validate_entry(data):
     filename = (data.get('filename') or '').strip()
     if not RE_BOOT_FILE.match(filename):
         return None, 'Invalid boot filename'
+    # The boot server (next-server) is required: the app hands clients a
+    # filename to fetch from an EXTERNAL TFTP/HTTP server — it no longer runs
+    # a TFTP server of its own, so there is nothing to fall back to.
     server = (data.get('server') or '').strip()
-    if server and not (is_ipv4(server) or valid_hostname_fqdn(server)):
+    if not server:
+        return None, 'A boot server (next-server IP or hostname) is required'
+    if not (is_ipv4(server) or valid_hostname_fqdn(server)):
         return None, 'Invalid boot server'
     arches = [str(a).strip() for a in (data.get('arches') or []) if str(a).strip() != '']
     for a in arches:
@@ -48,17 +54,10 @@ def netboot_settings():
     locked = locked_error('netboot')
     if locked:
         return locked
-    data = request.get_json() or {}
+    data, e = json_object()
+    if e:
+        return e
     nb = load_store('netboot')
-    if 'tftp_enabled' in data:
-        nb['tftp_enabled'] = bool(data['tftp_enabled'])
-    if 'tftp_secure' in data:
-        nb['tftp_secure'] = bool(data['tftp_secure'])
-    if 'tftp_root' in data:
-        root = (data['tftp_root'] or '').strip()
-        if not valid_tftp_root(root):
-            return err('Invalid TFTP root path (no "/" or ".." — pick a real subdirectory)')
-        nb['tftp_root'] = root
     if 'proxy_dhcp' in data:
         nb['proxy_dhcp'] = bool(data['proxy_dhcp'])
     if 'proxy_subnet' in data:

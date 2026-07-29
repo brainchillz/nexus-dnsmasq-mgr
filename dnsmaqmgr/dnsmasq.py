@@ -25,7 +25,7 @@ from collections import deque
 from flask import Blueprint, jsonify
 
 from .core.config import (RENDER_DIR, CONF_DIR, MANAGED_HOSTS, DHCP_HOSTS_FILE,
-                          DHCP_OPTS_FILE, LEASES_FILE, TFTP_DIR, DNSMASQ_BIN,
+                          DHCP_OPTS_FILE, LEASES_FILE, DNSMASQ_BIN,
                           DNSMASQ_UNIT, SUPERVISE, write_text_atomic)
 from .core.runcmd import run, err
 from .core.store import STORE_LOCK, load_store, save_store, bump_serial
@@ -182,35 +182,36 @@ def render_dhcp_opts(dhcp, settings):
 
 
 def render_boot(netboot, settings):
+    """Boot directives only — the app points clients at an EXTERNAL boot server
+    (next-server) and never serves files itself. `server` is required per entry
+    (validated on the way in), so both dhcp-boot and pxe-service carry it."""
     lines = [HEADER]
-    if netboot.get('tftp_enabled'):
-        lines.append('enable-tftp')
-        lines.append('tftp-root=%s' % (netboot.get('tftp_root') or TFTP_DIR))
-        if netboot.get('tftp_secure'):
-            lines.append('tftp-secure')
     if settings.get('dhcp_enabled') or netboot.get('proxy_dhcp'):
         entries = _enabled(netboot.get('entries', []))
         for e in entries:
             server = e.get('server') or ''
+            tail = ',,%s' % server if server else ''
             if e.get('arches'):
                 for arch in e['arches']:
                     lines.append('dhcp-match=set:%s,option:client-arch,%s' % (e['id'], arch))
-                lines.append('dhcp-boot=tag:%s,%s%s' % (e['id'], e['filename'],
-                                                        ',,%s' % server if server else ''))
+                lines.append('dhcp-boot=tag:%s,%s%s' % (e['id'], e['filename'], tail))
             else:
-                lines.append('dhcp-boot=%s%s' % (e['filename'],
-                                                 ',,%s' % server if server else ''))
+                lines.append('dhcp-boot=%s%s' % (e['filename'], tail))
         if netboot.get('proxy_dhcp') and netboot.get('proxy_subnet'):
             # Proxy-DHCP: offer boot info alongside a foreign DHCP server.
             lines.append('dhcp-range=%s,proxy' % netboot['proxy_subnet'])
             prompt = netboot.get('pxe_prompt') or 'Network boot'
             lines.append('pxe-prompt="%s",3' % prompt.replace('"', ''))
             for e in entries:
+                server = e.get('server') or ''
                 for arch in (e.get('arches') or ['0']):
                     csa = PXE_CSA.get(str(arch))
                     if csa:
-                        lines.append('pxe-service=%s,"%s",%s' % (
-                            csa, (e.get('name') or 'Boot').replace('"', ''), e['filename']))
+                        # server is required in proxy mode — no local TFTP to
+                        # fall back to.
+                        svc = 'pxe-service=%s,"%s",%s' % (
+                            csa, (e.get('name') or 'Boot').replace('"', ''), e['filename'])
+                        lines.append(svc + (',%s' % server if server else ''))
     return '\n'.join(lines) + '\n'
 
 
@@ -496,11 +497,9 @@ def dnsmasq_status():
     ctl = get_controller()
     st = ctl.status()
     settings = load_store('settings')
-    netboot = load_store('netboot')
     st.update({'mode': ctl.mode, 'version': dnsmasq_version(),
                'dns_enabled': settings.get('dns_enabled', True),
-               'dhcp_enabled': settings.get('dhcp_enabled', False),
-               'tftp_enabled': netboot.get('tftp_enabled', False)})
+               'dhcp_enabled': settings.get('dhcp_enabled', False)})
     return jsonify(st)
 
 

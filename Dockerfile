@@ -18,7 +18,7 @@ COPY docker/entrypoint.sh /opt/dnsmaq-mgr/entrypoint.sh
 RUN chmod +x /opt/dnsmaq-mgr/entrypoint.sh
 
 # /data holds everything mutable: auth.json, certs, state, rendered config,
-# leases, tftp root, history.db.
+# leases, history.db.
 ENV DNSMAQ_DATA_DIR=/data \
     DNSMAQ_SUPERVISE=1 \
     DNSMAQ_NO_SUDO=1

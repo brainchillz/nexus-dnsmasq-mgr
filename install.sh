@@ -47,7 +47,7 @@ fi
 $APP_DIR/venv/bin/pip install -q -r $APP_DIR/requirements.txt
 
 info "Preparing data directories..."
-mkdir -p $APP_DIR/state $APP_DIR/certs $APP_DIR/leases $APP_DIR/tftp \
+mkdir -p $APP_DIR/state $APP_DIR/certs $APP_DIR/leases \
          $APP_DIR/render/dnsmasq.d $APP_DIR/render/hosts.d
 chown -R $APP_USER:$APP_USER $APP_DIR
 # The interpreter, entrypoint and package that the sudoers rules run as ROOT
@@ -56,10 +56,10 @@ chown -R $APP_USER:$APP_USER $APP_DIR
 # app-user-owned and writable).
 chown -R root:root $APP_DIR/venv $APP_DIR/app.py $APP_DIR/dnsmaqmgr \
                    $APP_DIR/static $APP_DIR/templates
-# dnsmasq (root at startup, 'nobody'/'dnsmasq' after priv-drop and for the
-# TFTP child) must be able to read the rendered config, hosts and tftp trees.
+# dnsmasq (root at startup, 'nobody'/'dnsmasq' after priv-drop) must be able to
+# read the rendered config and hosts trees.
 chmod 755 $APP_DIR $APP_DIR/render $APP_DIR/render/dnsmasq.d \
-          $APP_DIR/render/hosts.d $APP_DIR/leases $APP_DIR/tftp
+          $APP_DIR/render/hosts.d $APP_DIR/leases
 chmod 700 $APP_DIR/state $APP_DIR/certs
 
 info "Writing sudoers rules (argument-pinned)..."
@@ -148,7 +148,7 @@ systemctl restart dnsmaq-mgr
 if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then
     info "Allowing web UI port $WEB_PORT/tcp in ufw..."
     ufw allow $WEB_PORT/tcp >/dev/null
-    warn "DNS/DHCP/TFTP ports (53, 67/udp, 69/udp) were NOT opened automatically —"
+    warn "DNS/DHCP ports (53, 67/udp) were NOT opened automatically —"
     warn "open them for your LAN once you enable those features:"
     warn "  ufw allow from <lan-subnet> to any port 53; ufw allow 67/udp; ufw allow 69/udp"
 fi

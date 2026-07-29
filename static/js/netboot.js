@@ -1,4 +1,6 @@
-// Network Boot page: TFTP, proxy-DHCP, arch-matched boot entries.
+// Network Boot page: DHCP boot options pointing at an external boot server
+// (next-server), proxy-DHCP, and arch-matched entries. The app does not host
+// a TFTP server — boot files live on your own TFTP/HTTP server.
 let _nbData = null;
 
 const NB_ARCHES = [
@@ -22,7 +24,7 @@ async function page_netboot() {
     <td>${escapeHtml(e.name)}</td>
     <td>${(e.arches && e.arches.length) ? e.arches.map(a => `<span class="badge-type">${escapeHtml(NB_ARCH_LABEL[a] || 'arch ' + a)}</span>`).join(' ') : '<span class="help">any client</span>'}</td>
     <td><code>${escapeHtml(e.filename)}</code></td>
-    <td>${escapeHtml(e.server || 'this host')}</td>
+    <td>${escapeHtml(e.server || '—')}</td>
     <td>${enabledBadge(e.enabled)}</td>
     <td class="row-actions">${can ? `
       <button class="btn btn-sm btn-outline" onclick="nbEntryModal('${jsArg(e.id)}')">Edit</button>
@@ -35,16 +37,6 @@ async function page_netboot() {
       ${currentRole === 'admin' ? '<a href="#" onclick="toggleFeature(\'dhcp_enabled\', true);return false">Enable DHCP</a> or turn on proxy-DHCP below.' : ''}</div>`}
     ${lockedBanner('netboot')}
     <div class="cards">
-      <div class="card">
-        <div class="card-head">TFTP server</div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0">
-          <span>Serve files over TFTP</span>${switchHtml(nb.tftp_enabled, 'nbSaveSettings({tftp_enabled: this.checked})', !can)}</div>
-        <div class="form-group"><label>TFTP root directory</label>
-          <input id="nb-root" class="form-control" value="${escapeHtml(nb.tftp_root || '')}" placeholder="(default: app tftp/ dir)" ${can ? '' : 'disabled'}></div>
-        <label class="checkitem" style="padding-left:0"><input id="nb-secure" type="checkbox" ${nb.tftp_secure ? 'checked' : ''} ${can ? '' : 'disabled'}> Secure mode (only world-readable files)</label>
-        ${can ? '<div class="toolbar" style="margin-top:8px"><button class="btn btn-sm" onclick="nbSaveSettings({tftp_root: $(\'nb-root\').value.trim(), tftp_secure: $(\'nb-secure\').checked})">Save TFTP settings</button></div>' : ''}
-        <p class="help">Drop boot files (ipxe.efi, undionly.kpxe, grubx64.efi, …) into the TFTP root on this host.</p>
-      </div>
       <div class="card">
         <div class="card-head">Proxy-DHCP (PXE alongside another DHCP server)</div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0">
@@ -94,13 +86,17 @@ function nbEntryModal(id) {
     <div class="form-group"><label>Client architectures (empty = all clients)</label>
       <div class="checklist">${checks}</div></div>
     <div class="form-group"><label>Boot filename</label><input id="nb-file" class="form-control" value="${escapeHtml(e.filename || '')}" placeholder="ipxe.efi"></div>
-    <div class="form-group"><label>Boot server (optional — defaults to this host)</label><input id="nb-server" class="form-control" value="${escapeHtml(e.server || '')}"></div>
+    <div class="form-group"><label>Boot server (next-server — required)</label><input id="nb-server" class="form-control" value="${escapeHtml(e.server || '')}" placeholder="10.0.0.20 (your TFTP/HTTP boot server)"></div>
     <div class="form-group"><label>Comment</label><input id="nb-comment" class="form-control" value="${escapeHtml(e.comment || '')}"></div>
     <label class="checkitem" style="padding-left:0"><input id="nb-enabled" type="checkbox" ${e.enabled !== false ? 'checked' : ''}> Enabled</label>
     <button class="btn" onclick="nbEntrySave('${jsArg(id || '')}')">${id ? 'Save' : 'Add'}</button>`);
 }
 
 async function nbEntrySave(id) {
+  if (!$('nb-server').value.trim()) {
+    alert('A boot server (next-server) is required — the app no longer hosts boot files itself.');
+    return;
+  }
   const fields = {
     name: $('nb-name').value.trim(),
     arches: Array.from(document.querySelectorAll('.nb-arch:checked')).map(c => c.value),

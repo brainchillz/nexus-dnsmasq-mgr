@@ -195,23 +195,16 @@ def mirror_receive():
                     return err('netboot: %s' % e, 422)
                 rec['id'] = _keep_id(raw, 'b')
                 entries.append(rec)
-            nb_settings = {}
-            fake = dict(d)
-            fake.pop('entries', None)
-            # Route netboot scalars through the same checks the settings route uses.
-            from .core.validators import RE_COMMENT, is_ipv4, valid_tftp_root
-            root = (d.get('tftp_root') or '').strip()
-            if not valid_tftp_root(root):
-                return err('netboot: invalid tftp root (no "/" or "..")', 422)
+            # Route netboot scalars through the same checks the settings route
+            # uses. No TFTP fields any more — boot is DHCP-only.
+            from .core.validators import RE_COMMENT, is_ipv4
             subnet = (d.get('proxy_subnet') or '').strip()
             if subnet and not is_ipv4(subnet):
                 return err('netboot: invalid proxy subnet', 422)
             prompt = str(d.get('pxe_prompt') or '')
             if not RE_COMMENT.match(prompt):
                 return err('netboot: invalid pxe prompt', 422)
-            nb_settings = {'tftp_enabled': bool(d.get('tftp_enabled')),
-                           'tftp_secure': bool(d.get('tftp_secure', True)),
-                           'tftp_root': root, 'proxy_dhcp': bool(d.get('proxy_dhcp')),
+            nb_settings = {'proxy_dhcp': bool(d.get('proxy_dhcp')),
                            'proxy_subnet': subnet, 'pxe_prompt': prompt,
                            'entries': entries}
             staged['netboot'] = nb_settings

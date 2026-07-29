@@ -20,14 +20,6 @@ def test_is_upstream_unicode_port_does_not_crash():
     assert is_upstream('1.2.3.4#²') is False        # superscript-2: no crash
 
 
-def test_valid_tftp_root_blocks_root_and_traversal():
-    from dnsmaqmgr.core.validators import valid_tftp_root
-    assert valid_tftp_root('') is True                   # empty = app default
-    assert valid_tftp_root('/srv/tftp') is True
-    assert valid_tftp_root('/') is False                 # serving fs root
-    assert valid_tftp_root('/srv/../etc') is False       # traversal
-
-
 def test_cache_size_zero_is_rendered():
     from dnsmaqmgr.dnsmasq import render_main
     assert 'cache-size=0' in render_main({'cache_size': 0})

@@ -8,7 +8,7 @@ services:
     build: .
     image: dnsmaq-mgr
     container_name: dnsmaq-mgr
-    network_mode: host          # full functionality: DNS + DHCP + TFTP/PXE
+    network_mode: host          # full functionality: DNS + DHCP + PXE boot info
     cap_add:
       - NET_ADMIN               # dnsmasq exits rc=5 without it once DHCP is enabled
     restart: unless-stopped
