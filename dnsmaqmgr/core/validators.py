@@ -36,6 +36,11 @@ def is_ipv4(s):
 
 
 def is_ipv6(s):
+    # Reject scope-ids (fe80::1%zone): CPython accepts newlines, '=', ',' and
+    # spaces inside the zone, and such a value would smuggle an extra directive
+    # into a rendered dnsmasq line. is_ip/is_upstream inherit this guard.
+    if '%' in str(s):
+        return False
     try:
         ipaddress.IPv6Address(s)
         return True
