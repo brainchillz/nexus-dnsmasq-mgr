@@ -97,6 +97,11 @@ function toggleTheme(e) {
 }
 
 // ─── Shared helpers ─────────────────────────────────────
+// Inline stroke icon from the symbol set in index.html.
+function icon(name, cls) {
+  return `<svg class="ico ${cls || ''}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+}
+
 function fmtTs(sec) {
   if (!sec) return '-';
   try { return new Date(sec * 1000).toLocaleString(); } catch (e) { return '-'; }
@@ -166,7 +171,7 @@ function applyRoleSubtitle() {
   if (!sub) return;
   if (isSecondaryNode()) {
     const src = Object.keys(mirrorStatus.sources || {}).join(', ');
-    sub.innerHTML = '&#128274; secondary &middot; synced from ' + escapeHtml(src);
+    sub.innerHTML = icon('lock', 'ico-sm') + ' secondary &middot; synced from ' + escapeHtml(src);
     sub.style.color = 'var(--primary)';
   } else {
     sub.textContent = 'dnsmasq management';
@@ -179,7 +184,7 @@ function lockedBanner(section) {
   for (const [name, s] of Object.entries(mirrorStatus.sources || {})) {
     if ((s.sections || []).includes(section)) { src = name; break; }
   }
-  return `<div class="alert alert-info">&#128274; This section is mirrored from <strong>${escapeHtml(src)}</strong> and is read-only on this node.
+  return `<div class="alert alert-info">${icon('lock', 'ico-sm')} This section is mirrored from <strong>${escapeHtml(src)}</strong> and is read-only on this node.
     <a href="#" onclick="showPage('peers');return false">Manage mirroring</a></div>`;
 }
 
@@ -274,7 +279,7 @@ async function page_overview() {
     peerCard = `
     <div class="card card-link" onclick="showPage('peers')" style="border-color:var(--primary)">
       <div class="card-head">Mirroring</div>
-      <div class="card-value" style="font-size:1.3em">&#128274; Secondary</div>
+      <div class="card-value" style="font-size:1.3em">${icon('lock')} Secondary</div>
       <div class="card-sub">synced from <strong>${escapeHtml(srcNames)}</strong></div>
       <div class="card-sub">${(mirrorStatus.locked || []).length} section(s) read-only${lastRecv ? ' &middot; last ' + fmtTs(lastRecv) : ''}</div>
     </div>`;
@@ -297,7 +302,7 @@ async function page_overview() {
         <div class="card-sub">${escapeHtml(p.start)} – ${escapeHtml(p.end)}</div>
       </div>`).join('')}</div>` : '';
 
-  const secondaryBanner = isSecondary ? `<div class="alert alert-info">&#128274; <strong>Secondary node.</strong>
+  const secondaryBanner = isSecondary ? `<div class="alert alert-info">${icon('lock', 'ico-sm')} <strong>Secondary node.</strong>
     DNS is managed on <strong>${escapeHtml(srcNames)}</strong> and mirrored here read-only — make changes on the primary, not here.</div>` : '';
 
   $('page-content').innerHTML = `

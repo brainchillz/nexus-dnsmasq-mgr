@@ -51,7 +51,7 @@ async function page_dns() {
     <h3>Host Records <span class="help">(the dnsmasq hosts file: name &rarr; A/AAAA)</span></h3>
     ${canHosts ? `<div class="toolbar">
       <button class="btn btn-sm" onclick="dnsHostModal()">+ Add host record</button>
-      <button class="btn btn-sm btn-outline" onclick="dnsImportModal()">&#8681; Import hosts file</button>
+      <button class="btn btn-sm btn-outline" onclick="dnsImportModal()">${icon('dl', 'ico-sm')} Import hosts file</button>
     </div>` : ''}
     <table class="table"><thead><tr><th>Name</th><th>A (IPv4)</th><th>AAAA (IPv6)</th><th>State</th><th>Comment</th><th></th></tr></thead>
       <tbody>${hostRows || '<tr><td colspan="6">No host records</td></tr>'}</tbody></table>
