@@ -4,7 +4,7 @@ import ipaddress
 from flask import Blueprint, jsonify, request
 
 from .core.config import LEASES_FILE
-from .core.runcmd import err
+from .core.runcmd import err, json_object
 from .core.store import load_store, save_store, new_id, find_record
 from .core.validators import (RE_COMMENT, RE_DHCP_OPTION, RE_HOSTNAME, RE_IFACE,
                               RE_LEASE, RE_MAC, RE_OPT_VALUE, RE_TAG, is_ipv4)
@@ -77,10 +77,19 @@ def _validate(coll, data):
 
 
 def _dup_check(coll, items, rec, skip_id=None):
+    # dnsmasq refuses to start on a duplicate dhcp-host MAC *or* IP (and a
+    # repeated hostname is almost always a mistake), and --test does not catch
+    # it — so reject here rather than let the next restart fail.
     if coll == 'static_leases':
         for it in items:
-            if it.get('id') != skip_id and it.get('mac') == rec['mac']:
+            if it.get('id') == skip_id:
+                continue
+            if it.get('mac') == rec['mac']:
                 return 'A static lease for %s already exists' % rec['mac']
+            if it.get('ip') == rec['ip']:
+                return 'A static lease for %s already exists' % rec['ip']
+            if rec.get('hostname') and it.get('hostname') == rec['hostname']:
+                return "A static lease with hostname '%s' already exists" % rec['hostname']
     return None
 
 
@@ -96,7 +105,10 @@ def dhcp_add(coll):
     locked = locked_error('dhcp')
     if locked:
         return locked
-    rec, e = _validate(coll, request.get_json() or {})
+    body, e = json_object()
+    if e:
+        return e
+    rec, e = _validate(coll, body)
     if e:
         return err(e)
     d = load_store('dhcp')
@@ -124,9 +136,16 @@ def dhcp_update(coll, rid):
     if locked:
         return locked
     d = load_store('dhcp')
-    if not find_record(d[coll], rid):
+    existing = find_record(d[coll], rid)
+    if not existing:
         return err('No such record', 404)
-    rec, e = _validate(coll, request.get_json() or {})
+    body, e = json_object()
+    if e:
+        return e
+    # PARTIAL UPDATE: layer the request over the stored record so a field the
+    # caller does not send keeps its value (an omitted `enabled` no longer
+    # silently re-enables a disabled record; omitted comment/tag/ip stay put).
+    rec, e = _validate(coll, {**existing, **body})
     if e:
         return err(e)
     dup = _dup_check(coll, d[coll], rec, skip_id=rid)
@@ -208,7 +227,10 @@ def dhcp_reserve():
     locked = locked_error('dhcp')
     if locked:
         return locked
-    rec, e = _validate('static_leases', request.get_json() or {})
+    body, e = json_object()
+    if e:
+        return e
+    rec, e = _validate('static_leases', body)
     if e:
         return err(e)
     d = load_store('dhcp')

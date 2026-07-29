@@ -240,7 +240,8 @@ def _peer(**kw):
 
 def test_sync_creates_and_mirrors_deletes():
     gw = FakeGateway(static=[('stale.lan', 'A', '10.0.0.9')])
-    s = unifi.sync_hosts(_peer(), HOSTS, client=_client(gw))
+    # Mirror-delete is now opt-in (safe default is additive), so enable it here.
+    s = unifi.sync_hosts(_peer(unifi_delete_extra=True), HOSTS, client=_client(gw))
     assert (s['created'], s['deleted'], s['failed']) == (2, 1, 0)
     assert gw.names() == {('a.lan', 'A'): '10.0.0.1', ('b.lan', 'A'): '10.0.0.2'}
 
@@ -297,7 +298,7 @@ def test_claim_preserves_dhcp_reservation():
 
 def test_sync_counts_write_failures_without_aborting():
     gw = FakeGateway(fail_on=('a.lan',))
-    s = unifi.sync_hosts(_peer(), HOSTS, client=_client(gw))
+    s = unifi.sync_hosts(_peer(unifi_delete_extra=True), HOSTS, client=_client(gw))
     assert s['failed'] == 1 and s['created'] == 1  # b.lan still written
     assert 'a.lan' in s['errors'][0]
     assert unifi.status_line(s).startswith('error: 1 write(s) failed')
@@ -306,7 +307,7 @@ def test_sync_counts_write_failures_without_aborting():
 def test_sync_refuses_to_wipe_on_empty_hosts():
     gw = FakeGateway(static=[('x.lan', 'A', '10.0.0.1')])
     try:
-        unifi.sync_hosts(_peer(), [], client=_client(gw))
+        unifi.sync_hosts(_peer(unifi_delete_extra=True), [], client=_client(gw))
         assert False, 'expected UniFiError'
     except unifi.UniFiError as e:
         assert 'refusing to wipe' in str(e)

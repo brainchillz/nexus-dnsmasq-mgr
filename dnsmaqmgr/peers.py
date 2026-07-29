@@ -39,31 +39,38 @@ _push_lock = threading.Lock()  # serialize pushes so status updates don't race
 
 
 def build_payload(sections):
-    """Assemble the mirror payload for the given sections from local stores."""
+    """Assemble the mirror payload for the given sections from local stores.
+
+    Carries a PER-SECTION serial map (`serials`) alongside the legacy scalar
+    `serial` (the max). Each store has an independent counter, so a single
+    scalar can't tell a stale dhcp push from a fresh one when the dns counter
+    happens to lead — the receiver compares per section."""
     sections = [x for x in sections if x in SECTIONS]
-    dns = load_store('dns')
-    dhcp = load_store('dhcp')
-    netboot = load_store('netboot')
-    settings = load_store('settings')
-    data, serial = {}, 0
+    with STORE_LOCK:            # one consistent cross-store snapshot
+        dns = load_store('dns')
+        dhcp = load_store('dhcp')
+        netboot = load_store('netboot')
+        settings = load_store('settings')
+    data, serials = {}, {}
     if 'hosts' in sections:
         data['hosts'] = dns['hosts']
-        serial = max(serial, int(dns.get('serial', 0)))
+        serials['hosts'] = int(dns.get('serial', 0))
     if 'dns' in sections:
         data['dns'] = {'cnames': dns['cnames'], 'addresses': dns['addresses'],
                        'forwards': dns['forwards'], 'upstreams': settings.get('upstreams', [])}
-        serial = max(serial, int(dns.get('serial', 0)), int(settings.get('serial', 0)))
+        serials['dns'] = max(int(dns.get('serial', 0)), int(settings.get('serial', 0)))
     if 'dhcp' in sections:
         data['dhcp'] = {'ranges': dhcp['ranges'], 'static_leases': dhcp['static_leases'],
                         'options': dhcp['options']}
-        serial = max(serial, int(dhcp.get('serial', 0)))
+        serials['dhcp'] = int(dhcp.get('serial', 0))
     if 'netboot' in sections:
         nb = dict(netboot)
         nb.pop('serial', None)
         data['netboot'] = nb
-        serial = max(serial, int(netboot.get('serial', 0)))
+        serials['netboot'] = int(netboot.get('serial', 0))
+    serial = max(serials.values()) if serials else 0
     return {'source': socket.gethostname() or 'dnsmaq-mgr', 'serial': serial,
-            'sections': sections, 'data': data}
+            'serials': serials, 'sections': sections, 'data': data}
 
 
 def _split_url(url, default_port=8443):
@@ -232,7 +239,10 @@ def _validate_peer(data, existing=None):
             return None, 'Invalid UniFi site name'
         rec.update({'unifi_username': username, 'unifi_password': password or kept,
                     'unifi_site': site,
-                    'unifi_delete_extra': bool(data.get('unifi_delete_extra', True)),
+                    # Default OFF: a sync is additive unless the operator opts in
+                    # to reconciliation, so a first sync never silently deletes
+                    # pre-existing gateway Static DNS entries it did not create.
+                    'unifi_delete_extra': bool(data.get('unifi_delete_extra', False)),
                     'unifi_claim_client_dns': bool(data.get('unifi_claim_client_dns'))})
         return rec, None
 

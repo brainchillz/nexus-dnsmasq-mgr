@@ -2,10 +2,10 @@
 (PXE BIOS / UEFI / HTTP boot via dhcp-match on option:client-arch)."""
 from flask import Blueprint, jsonify, request
 
-from .core.runcmd import err
+from .core.runcmd import err, json_object
 from .core.store import load_store, save_store, new_id, find_record
-from .core.validators import (RE_ARCH, RE_BOOT_FILE, RE_COMMENT, RE_PATH,
-                              is_ipv4, valid_hostname_fqdn)
+from .core.validators import (RE_ARCH, RE_BOOT_FILE, RE_COMMENT,
+                              is_ipv4, valid_hostname_fqdn, valid_tftp_root)
 from .dnsmasq import apply_change, PXE_CSA
 from .mirror import locked_error
 
@@ -56,8 +56,8 @@ def netboot_settings():
         nb['tftp_secure'] = bool(data['tftp_secure'])
     if 'tftp_root' in data:
         root = (data['tftp_root'] or '').strip()
-        if root and not RE_PATH.match(root):
-            return err('Invalid TFTP root path')
+        if not valid_tftp_root(root):
+            return err('Invalid TFTP root path (no "/" or ".." — pick a real subdirectory)')
         nb['tftp_root'] = root
     if 'proxy_dhcp' in data:
         nb['proxy_dhcp'] = bool(data['proxy_dhcp'])
@@ -85,7 +85,10 @@ def netboot_entry_add():
     locked = locked_error('netboot')
     if locked:
         return locked
-    rec, e = _validate_entry(request.get_json() or {})
+    body, e = json_object()
+    if e:
+        return e
+    rec, e = _validate_entry(body)
     if e:
         return err(e)
     rec['id'] = new_id('b')
@@ -107,9 +110,14 @@ def netboot_entry_update(rid):
     if locked:
         return locked
     nb = load_store('netboot')
-    if not find_record(nb['entries'], rid):
+    existing = find_record(nb['entries'], rid)
+    if not existing:
         return err('No such entry', 404)
-    rec, e = _validate_entry(request.get_json() or {})
+    body, e = json_object()
+    if e:
+        return e
+    # PARTIAL UPDATE: layer over the stored entry so an omitted field is kept.
+    rec, e = _validate_entry({**existing, **body})
     if e:
         return err(e)
     rec['id'] = rid

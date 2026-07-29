@@ -15,8 +15,8 @@ import hashlib
 import secrets
 from flask import Blueprint, jsonify, request
 
-from .core.runcmd import err
-from .core.store import load_store, save_store, new_id
+from .core.runcmd import err, json_object
+from .core.store import load_store, save_store, new_id, STORE_LOCK
 from .core.validators import RE_ID, RE_SOURCE
 from .dnsmasq import apply_change
 
@@ -63,30 +63,38 @@ def mirror_status():
 def mirror_token():
     """Generate/rotate the mirror token. Secret shown exactly once."""
     secret = MIRROR_TOKEN_PREFIX + secrets.token_urlsafe(32)
-    s = load_store('settings')
-    s['mirror_token_hash'] = hashlib.sha256(secret.encode()).hexdigest()
-    save_store('settings', s)
+    # Read-modify-write under the store lock so a concurrent settings save (or
+    # apply_change's snapshot/restore) can't discard the just-rotated hash.
+    with STORE_LOCK:
+        s = load_store('settings')
+        s['mirror_token_hash'] = hashlib.sha256(secret.encode()).hexdigest()
+        save_store('settings', s)
     return jsonify({'success': True, 'token': secret})
 
 
 @bp.route('/api/mirror/accept', methods=['POST'])
 def mirror_accept():
-    enabled = bool((request.get_json() or {}).get('enabled'))
-    s = load_store('settings')
-    if enabled and not s.get('mirror_token_hash'):
-        return err('Generate a mirror token first')
-    s['mirror_accept'] = enabled
-    save_store('settings', s)
+    body, e = json_object()
+    if e:
+        return e
+    enabled = bool(body.get('enabled'))
+    with STORE_LOCK:
+        s = load_store('settings')
+        if enabled and not s.get('mirror_token_hash'):
+            return err('Generate a mirror token first')
+        s['mirror_accept'] = enabled
+        save_store('settings', s)
     return jsonify({'success': True, 'accept': enabled})
 
 
 @bp.route('/api/mirror/sources/<source>/detach', methods=['POST'])
 def mirror_detach(source):
-    s = load_store('settings')
-    if source not in s.get('mirror_sources', {}):
-        return err('No such source', 404)
-    del s['mirror_sources'][source]
-    save_store('settings', s)
+    with STORE_LOCK:
+        s = load_store('settings')
+        if source not in s.get('mirror_sources', {}):
+            return err('No such source', 404)
+        del s['mirror_sources'][source]
+        save_store('settings', s)
     return jsonify({'success': True})
 
 
@@ -103,7 +111,9 @@ def mirror_receive():
             not hmac.compare_digest(hashlib.sha256(token.encode()).hexdigest(), stored):
         return err('Invalid mirror token', 401)
 
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return err('Expected a JSON object', 422)
     source = str(payload.get('source') or '')
     if not RE_SOURCE.match(source):
         return err('Invalid source name')
@@ -116,9 +126,20 @@ def mirror_receive():
         return err('No valid sections in payload')
     data = payload.get('data') or {}
 
-    last = s.get('mirror_sources', {}).get(source, {})
-    if serial < int(last.get('serial', -1)):
-        return err('Stale serial (%s < %s)' % (serial, last.get('serial')), 409)
+    # Per-section staleness: each store has its own counter, so a single scalar
+    # wrongly rejects a fresh dhcp-only push whenever the dns counter leads.
+    # Compare each section against its own last-seen serial; fall back to the
+    # scalar for a legacy sender that sends no `serials` map.
+    src_prev = s.get('mirror_sources', {}).get(source, {}) or {}
+    incoming = payload.get('serials') if isinstance(payload.get('serials'), dict) else None
+    prev_serials = src_prev.get('serials', {})
+    if incoming is not None:
+        stale = [sec for sec in sections
+                 if int(incoming.get(sec, serial)) < int(prev_serials.get(sec, -1))]
+        if stale:
+            return err('Stale serial for section(s): %s' % ', '.join(stale), 409)
+    elif serial < int(src_prev.get('serial', -1)):
+        return err('Stale serial (%s < %s)' % (serial, src_prev.get('serial')), 409)
 
     # Re-validate every record with the same validators local edits go
     # through — a compromised primary must not be able to inject config lines.
@@ -178,10 +199,10 @@ def mirror_receive():
             fake = dict(d)
             fake.pop('entries', None)
             # Route netboot scalars through the same checks the settings route uses.
-            from .core.validators import RE_PATH, RE_COMMENT, is_ipv4
+            from .core.validators import RE_COMMENT, is_ipv4, valid_tftp_root
             root = (d.get('tftp_root') or '').strip()
-            if root and not RE_PATH.match(root):
-                return err('netboot: invalid tftp root', 422)
+            if not valid_tftp_root(root):
+                return err('netboot: invalid tftp root (no "/" or "..")', 422)
             subnet = (d.get('proxy_subnet') or '').strip()
             if subnet and not is_ipv4(subnet):
                 return err('netboot: invalid proxy subnet', 422)
@@ -218,8 +239,12 @@ def mirror_receive():
         st = load_store('settings')
         if 'dns' in staged:
             st['upstreams'] = staged['dns']['upstreams']
-        st.setdefault('mirror_sources', {})[source] = {
-            'serial': serial, 'last_received': int(time.time()), 'sections': sections}
+        src_rec = st.setdefault('mirror_sources', {}).setdefault(source, {})
+        merged = dict(src_rec.get('serials', {}))
+        for sec in sections:
+            merged[sec] = int((incoming or {}).get(sec, serial))
+        src_rec.update({'serial': serial, 'serials': merged,
+                        'last_received': int(time.time()), 'sections': sections})
         save_store('settings', st)
 
     res = apply_change(mutate, sections=sections, from_mirror=True)

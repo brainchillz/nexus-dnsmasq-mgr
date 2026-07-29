@@ -1,7 +1,7 @@
 """Global settings + feature toggles."""
 from flask import Blueprint, jsonify, request
 
-from .core.runcmd import err
+from .core.runcmd import err, json_object
 from .core.store import load_store, save_store
 from .core.validators import (RE_DOMAIN, RE_IFACE, is_ip, is_upstream)
 from .dnsmasq import apply_change
@@ -25,27 +25,46 @@ def public_settings(s=None):
     return s
 
 
-def _validated(data, cur):
-    """Validate an incoming settings payload against the current store; returns
-    (new_settings, None) or (None, error message)."""
-    s = dict(cur)
+def _list_field(data, key):
+    """A list-typed setting: reject a bare string (which would iterate into
+    individual characters and silently commit garbage) up front."""
+    raw = data[key]
+    if raw in (None, ''):
+        return [], None
+    if not isinstance(raw, list):
+        return None, '%s must be a list' % key
+    return [str(x).strip() for x in raw if str(x).strip()], None
+
+
+def _validated(data):
+    """Validate an incoming settings payload; return (delta, None) or
+    (None, error). `delta` holds ONLY the keys the caller sent, validated — the
+    caller merges it onto a freshly loaded store inside the write lock, so a
+    concurrent write is not lost to a stale read-modify-write."""
+    s = {}
     if 'domain' in data:
         dom = (data['domain'] or '').strip()
         if dom and not RE_DOMAIN.match(dom):
             return None, 'Invalid domain'
         s['domain'] = dom
     if 'interfaces' in data:
-        ifaces = [str(i).strip() for i in (data['interfaces'] or []) if str(i).strip()]
+        ifaces, e = _list_field(data, 'interfaces')
+        if e:
+            return None, e
         if any(not RE_IFACE.match(i) for i in ifaces):
             return None, 'Invalid interface name'
         s['interfaces'] = ifaces
     if 'listen_addresses' in data:
-        addrs = [str(a).strip() for a in (data['listen_addresses'] or []) if str(a).strip()]
+        addrs, e = _list_field(data, 'listen_addresses')
+        if e:
+            return None, e
         if any(not is_ip(a) for a in addrs):
             return None, 'Invalid listen address'
         s['listen_addresses'] = addrs
     if 'upstreams' in data:
-        ups = [str(u).strip() for u in (data['upstreams'] or []) if str(u).strip()]
+        ups, e = _list_field(data, 'upstreams')
+        if e:
+            return None, e
         if any(not is_upstream(u) for u in ups):
             return None, 'Invalid upstream server (use IP or IP#port)'
         s['upstreams'] = ups
@@ -75,13 +94,22 @@ def settings_get():
 
 @bp.route('/api/settings', methods=['POST'])
 def settings_save():
-    data = request.get_json() or {}
-    cur = load_store('settings')
-    new, e = _validated(data, cur)
+    data, e = json_object()
     if e:
-        return err(e)
+        return e
+    delta, verr = _validated(data)
+    if verr:
+        return err(verr)
+
+    # Merge onto a store loaded INSIDE the write lock, so a concurrent save
+    # (or a mirror push) is not clobbered by a stale read-modify-write.
+    def mutate():
+        cur = load_store('settings')
+        cur.update(delta)
+        save_store('settings', cur)
+
     # Upstreams ride in the mirrored 'dns' section, so settings saves push it.
-    res = apply_change(lambda: save_store('settings', new), sections=['dns'])
+    res = apply_change(mutate, sections=['dns'])
     if isinstance(res, tuple):
         return res
     return jsonify({'success': True, 'settings': public_settings(), **res})
@@ -89,8 +117,10 @@ def settings_save():
 
 @bp.route('/api/settings/toggles', methods=['POST'])
 def settings_toggles():
-    data = request.get_json() or {}
-    cur = load_store('settings')
+    data, e = json_object()
+    if e:
+        return e
+    cur = load_store('settings')       # read for the conflict probe, not the write
     probe_note = None
     # Guard against a second DHCP server on the same network: before the
     # toggle goes live, broadcast a DHCPDISCOVER and warn if a foreign server
@@ -106,13 +136,18 @@ def settings_toggles():
                             'error': 'Another DHCP server is already active on this '
                                      'network: %s' % names}), 409
         probe_note = result.get('error')
-    for k in ('dns_enabled', 'dhcp_enabled'):
-        if k in data:
-            cur[k] = bool(data[k])
-    res = apply_change(lambda: save_store('settings', cur), sections=['settings'])
+    delta = {k: bool(data[k]) for k in ('dns_enabled', 'dhcp_enabled') if k in data}
+
+    def mutate():
+        c = load_store('settings')     # fresh inside the lock
+        c.update(delta)
+        save_store('settings', c)
+
+    res = apply_change(mutate, sections=['settings'])
     if isinstance(res, tuple):
         return res
+    fresh = load_store('settings')
     return jsonify({'success': True,
-                    'dns_enabled': cur['dns_enabled'],
-                    'dhcp_enabled': cur['dhcp_enabled'],
+                    'dns_enabled': fresh['dns_enabled'],
+                    'dhcp_enabled': fresh['dhcp_enabled'],
                     'probe_note': probe_note, **res})

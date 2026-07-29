@@ -50,6 +50,12 @@ info "Preparing data directories..."
 mkdir -p $APP_DIR/state $APP_DIR/certs $APP_DIR/leases $APP_DIR/tftp \
          $APP_DIR/render/dnsmasq.d $APP_DIR/render/hosts.d
 chown -R $APP_USER:$APP_USER $APP_DIR
+# The interpreter, entrypoint and package that the sudoers rules run as ROOT
+# must not be writable by the service user — otherwise any write-as-app-user
+# primitive becomes root. Re-own the code paths (only the data dirs below stay
+# app-user-owned and writable).
+chown -R root:root $APP_DIR/venv $APP_DIR/app.py $APP_DIR/dnsmaqmgr \
+                   $APP_DIR/static $APP_DIR/templates
 # dnsmasq (root at startup, 'nobody'/'dnsmasq' after priv-drop and for the
 # TFTP child) must be able to read the rendered config, hosts and tftp trees.
 chmod 755 $APP_DIR $APP_DIR/render $APP_DIR/render/dnsmasq.d \
@@ -62,9 +68,13 @@ JOURNALCTL="$(command -v journalctl)"
 cat > /etc/sudoers.d/dnsmaq-mgr <<EOF
 # DNSMAQ-MGR: exactly the dnsmasq service actions the web app needs — nothing else.
 $APP_USER ALL=(ALL) NOPASSWD: $SYSTEMCTL start dnsmasq, $SYSTEMCTL stop dnsmasq, $SYSTEMCTL restart dnsmasq, $SYSTEMCTL kill -s HUP dnsmasq, $SYSTEMCTL is-active dnsmasq, $SYSTEMCTL status dnsmasq
-$APP_USER ALL=(ALL) NOPASSWD: $JOURNALCTL -u dnsmasq *
-# The DHCP-conflict probe needs to bind UDP port 68 (privileged).
-$APP_USER ALL=(ALL) NOPASSWD: $APP_DIR/venv/bin/python $APP_DIR/app.py dhcp-probe*
+# Exact argv the app uses — NOT a trailing wildcard: '$JOURNALCTL -u dnsmasq *'
+# would let the service user pass '-e' and drop into a root pager (\`!sh\`).
+$APP_USER ALL=(ALL) NOPASSWD: $JOURNALCTL -u dnsmasq -n 200 --no-pager
+# The DHCP-conflict probe needs to bind UDP port 68 (privileged). Two exact
+# forms (no-args and args-after-a-space) so 'dhcp-probeX' can't match and fall
+# through cli.dispatch to start the whole web server as root.
+$APP_USER ALL=(ALL) NOPASSWD: $APP_DIR/venv/bin/python $APP_DIR/app.py dhcp-probe, $APP_DIR/venv/bin/python $APP_DIR/app.py dhcp-probe *
 EOF
 chmod 440 /etc/sudoers.d/dnsmaq-mgr
 visudo -cf /etc/sudoers.d/dnsmaq-mgr >/dev/null

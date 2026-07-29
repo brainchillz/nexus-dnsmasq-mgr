@@ -7,7 +7,7 @@ rule is missing instead of hanging on a password prompt. In Docker
 (DNSMAQ_NO_SUDO=1) the app runs as root and sudo is never prefixed.
 """
 import subprocess
-from flask import jsonify
+from flask import jsonify, request
 
 from .config import NO_SUDO
 
@@ -41,6 +41,21 @@ def run_safe(args, input_data=None):
 
 def err(message, code=400):
     return jsonify({'success': False, 'error': message}), code
+
+
+def json_object():
+    """Return (body_dict, None) or (None, error_response).
+
+    `request.get_json(silent=True) or {}` 500s on a valid-JSON non-dict body
+    (`[1]`, `"x"`, `5`) the moment a route calls `.get()` on it. This parses
+    once and rejects a non-object cleanly; an empty/absent body is an empty
+    object, matching the old `or {}` intent."""
+    data = request.get_json(silent=True)
+    if data is None:
+        return {}, None
+    if not isinstance(data, dict):
+        return None, err('Expected a JSON object')
+    return data, None
 
 
 def _num(x):

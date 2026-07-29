@@ -2,7 +2,7 @@
 overrides (address=/dom/ip) and domain forwards (server=/dom/upstream)."""
 from flask import Blueprint, jsonify, request
 
-from .core.runcmd import err
+from .core.runcmd import err, json_object
 from .core.store import load_store, save_store, new_id, find_record
 from .core.validators import (RE_COMMENT, RE_DOMAIN, is_ipv4, is_ipv6,
                               is_upstream, valid_hostname_fqdn)
@@ -173,7 +173,10 @@ def dns_add(coll):
     locked = locked_error(_section(coll))
     if locked:
         return locked
-    rec, e = _validate(coll, request.get_json() or {})
+    body, e = json_object()
+    if e:
+        return e
+    rec, e = _validate(coll, body)
     if e:
         return err(e)
     rec['id'] = new_id(coll[0])
@@ -197,9 +200,16 @@ def dns_update(coll, rid):
     if locked:
         return locked
     d = load_store('dns')
-    if not find_record(d[coll], rid):
+    existing = find_record(d[coll], rid)
+    if not existing:
         return err('No such record', 404)
-    rec, e = _validate(coll, request.get_json() or {})
+    body, e = json_object()
+    if e:
+        return e
+    # PARTIAL UPDATE: layer the request over the stored record so an omitted
+    # field keeps its value — an update that only sends `a` no longer wipes
+    # `aaaa`/`comment` or flips a disabled record back to enabled.
+    rec, e = _validate(coll, {**existing, **body})
     if e:
         return err(e)
     rec['id'] = rid

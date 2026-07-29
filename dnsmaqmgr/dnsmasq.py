@@ -78,7 +78,10 @@ def render_main(settings):
         lines.append('server=%s' % up)
     if settings.get('no_resolv'):
         lines.append('no-resolv')
-    if settings.get('cache_size'):
+    if settings.get('cache_size') is not None:
+        # Emit even for 0 — `cache-size=0` disables caching, which is exactly
+        # what the operator asked for; a falsy check would silently leave the
+        # default (150) in place instead.
         lines.append('cache-size=%d' % int(settings['cache_size']))
     if settings.get('domain_needed'):
         lines.append('domain-needed')

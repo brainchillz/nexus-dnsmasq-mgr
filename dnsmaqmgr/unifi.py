@@ -341,7 +341,7 @@ def sync_hosts(peer, hosts, client=None):
     rejects the login — individual record failures are counted, not raised.
     """
     desired = records_from_hosts(hosts)
-    if not desired and peer.get('unifi_delete_extra', True):
+    if not desired and peer.get('unifi_delete_extra', False):
         raise UniFiError('no host records to push; refusing to wipe gateway Static DNS')
 
     own = client is None
@@ -351,7 +351,7 @@ def sync_hosts(peer, hosts, client=None):
         client.login(peer.get('unifi_username') or '', peer.get('unifi_password') or '')
     try:
         claim = bool(peer.get('unifi_claim_client_dns'))
-        mirror = bool(peer.get('unifi_delete_extra', True))
+        mirror = bool(peer.get('unifi_delete_extra', False))
         static = client.list_static()
         client_dns = client.list_client_dns()
         p = plan(desired, static, client_dns, mirror=mirror, claim=claim)
