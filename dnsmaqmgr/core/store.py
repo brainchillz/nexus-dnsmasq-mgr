@@ -48,6 +48,16 @@ DEFAULTS = {
     # Blocklist subscriptions: metadata only — the fetched domains live as
     # one-per-line files under BLOCKLISTS_DIR, keyed by list id.
     'blocklists': {'serial': 0, 'lists': []},
+    # Alert/webhook config (backed up) and its runtime state (not backed up).
+    'alerts': {'enabled': False, 'webhook_url': '', 'format': 'generic',
+               'events': {'new_device': True, 'pool_high': True,
+                          'service_down': True, 'cert_expiry': True},
+               'pool_threshold': 90, 'cert_days': 14},
+    'alerts_state': {'baseline_done': False, 'known_macs': [],
+                     'alerted_pools': [], 'counter_sum': None,
+                     'last_sent': {}, 'recent': []},
+    # Last network-recon scan result (derived data; not backed up).
+    'recon': {'last': None},
     'peers': {'peers': []},
     'stats_cursor': {},
 }

@@ -152,10 +152,39 @@ pinning, last-sync status — works the same.
   Network application's Static DNS endpoint, so there is no token option; use
   a local admin with MFA disabled, since 2FA logins can't be automated.
 
+### Change history & rollback
+- **Every applied change is recorded**: who (session user, API token, mirror
+  push, or the system ticker), which sections, whether it reloaded or
+  restarted, plus a full store snapshot and the rendered base config.
+- **Rendered-config diffs** between any change and its predecessor, and
+  **one-click rollback** to any recorded point — re-applied through the same
+  `dnsmasq --test`-gated pipeline and itself recorded. Serials always move
+  forward so mirrors never see a "stale" rollback. Last 50 changes kept
+  (`DNSMAQ_CHANGELOG_KEEP`).
+
+### Alerts / webhooks
+- Checked on the 5-minute stats tick: **new device on LAN** (never-seen MAC
+  took a lease), **DHCP pool above threshold** (with hysteresis), **dnsmasq
+  down or restarted** (counter-reset detection), **web TLS certificate
+  nearing expiry**.
+- One webhook URL, three payload shapes: generic JSON, **ntfy**
+  (title/priority/tags headers) or **Slack**-compatible `{"text": …}`.
+  Per-event cooldowns; the first enabled tick baselines silently so enabling
+  alerts doesn't announce every existing device.
+
+### Network scan (record hygiene)
+- On-demand **ping/ARP sweep** over the addresses the app already manages —
+  enabled DHCP ranges, host-record IPs, active leases (never an arbitrary
+  scanner; capped target list).
+- Cross-referenced against the stores: live devices with **no DNS name**,
+  **stale host records** whose IP answers nothing and holds no lease, and
+  **duplicate / conflicting mappings** (one name → several IPs, one IP →
+  several names, record-vs-lease disagreements).
+
 ### Backup & restore
 - **Single-JSON export** of the full state — settings, DNS, DHCP, netboot,
-  blocklist subscriptions, mirroring peers — with accounts/API tokens
-  (hashes) optional. Makes bare-metal ↔ Docker migrations a download and an
+  blocklist subscriptions, alert config, mirroring peers — with accounts/API
+  tokens (hashes) optional. Makes bare-metal ↔ Docker migrations a download and an
   upload.
 - **All-or-nothing restore**: every record is re-validated with the same
   validators the UI uses and the whole set goes through the
@@ -304,6 +333,25 @@ addresses `{domain, ip}` · forwards `{domain, upstream}` — all plus
 |---|---|---|
 | GET | `/api/backup?include_accounts=1` | full-state JSON download (accounts optional) |
 | POST | `/api/backup/restore` | `{backup, include_accounts?}` — all-or-nothing, re-validated, `dnsmasq --test`-gated |
+
+### Change history
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/changelog` | timeline of applied changes (who/when/sections/action) |
+| GET | `/api/changelog/<id>/diff` | rendered-config unified diff against the previous change |
+| POST | `/api/changelog/<id>/rollback` | re-apply that snapshot (validated; serials move forward) |
+
+### Alerts (admin only)
+| Method | Path | Purpose |
+|---|---|---|
+| GET/POST | `/api/alerts` | webhook config: `{enabled, webhook_url, format: generic\|ntfy\|slack, events{}, pool_threshold, cert_days}` + recent deliveries |
+| POST | `/api/alerts/test` | send a test alert to the configured webhook |
+
+### Network scan
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/recon` | scan status/progress + last result (unnamed devices, stale records, duplicates) |
+| POST | `/api/recon/scan` | start a sweep over DHCP ranges + record IPs + leases |
 
 ### DHCP
 | Method | Path | Purpose |

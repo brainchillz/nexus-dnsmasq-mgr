@@ -3,26 +3,6 @@
 Feature ideas not yet scheduled. Roughly ordered by value; items are
 independent unless noted.
 
-## 4. Change history with diff and rollback
-
-Every change already goes render → validate → atomic swap. Keep the last N
-versions of the JSON stores, show a timeline of what changed / when / by
-which user or token, with rendered-config diffs and one-click revert.
-
-## 5. Alerts / webhooks
-
-Hang notifications off the existing 5-minute stats tick: unknown MAC took a
-lease (new device on LAN), DHCP pool >90% utilized, dnsmasq
-restarted/respawned, web certificate nearing expiry. One generic webhook
-plus ntfy/Slack-compatible payloads covers most targets.
-
-## 6. Network reconnaissance for record hygiene
-
-ARP/ping sweep of configured subnets, cross-referenced against leases and
-host records: devices with no DNS name, host records pointing at IPs that no
-longer answer (would have flagged the stale record from the 2026-08-05
-incident), and duplicate name↔IP mappings.
-
 ## 8. Prometheus `/metrics` endpoint
 
 Reuse the stats collector; expose current counters and pool utilization for
@@ -55,3 +35,12 @@ handles hosts files.
   enable/disable, `dnsmasq --test`-gated swaps (`/api/blocklists`).
 - **2026-08-05 — 7. Full-state backup / restore.** Single-JSON export /
   all-or-nothing validated restore, accounts optional (`/api/backup`).
+- **2026-08-05 — 4. Change history with diff and rollback.** Every apply
+  recorded with identity, store snapshot and rendered config; diffs and
+  validated one-click rollback on the History page (`/api/changelog`).
+- **2026-08-05 — 5. Alerts / webhooks.** New-device, pool-utilization,
+  service-down/restart and cert-expiry checks on the stats tick;
+  generic/ntfy/Slack webhook delivery with cooldowns (`/api/alerts`).
+- **2026-08-05 — 6. Network reconnaissance for record hygiene.** Ping/ARP
+  sweep over managed ranges/records/leases; unnamed devices, stale records,
+  duplicate mappings on the Network Scan page (`/api/recon`).

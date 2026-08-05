@@ -16,7 +16,7 @@ APP_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file
 STATIC_DIR = os.path.join(APP_DIR, 'static')
 TEMPLATES_DIR = os.path.join(APP_DIR, 'templates')
 
-APP_VERSION = '0.2.0'
+APP_VERSION = '0.3.0'
 
 DATA_DIR = os.environ.get('DNSMAQ_DATA_DIR', APP_DIR)
 STATE_DIR = os.path.join(DATA_DIR, 'state')
@@ -35,6 +35,10 @@ BLOCKLISTS_DIR = os.path.join(DATA_DIR, 'blocklists')
 # The system hosts file dnsmasq reads by default (`no-hosts` disables that).
 # The lookup/audit tools parse it to attribute answers; overridable for tests.
 ETC_HOSTS = os.environ.get('DNSMAQ_ETC_HOSTS', '/etc/hosts')
+
+# Change history: one JSON snapshot per applied change, pruned to the last N.
+CHANGELOG_DIR = os.path.join(DATA_DIR, 'changelog')
+CHANGELOG_KEEP = int(os.environ.get('DNSMAQ_CHANGELOG_KEEP', 50))
 
 
 def env_bool(name, default):
@@ -126,11 +130,12 @@ def write_text_atomic(path, text, mode=0o644):
 
 def ensure_dirs():
     """Create the DATA_DIR tree on first boot (bare metal and Docker volume)."""
-    for d in (STATE_DIR, CONF_DIR, HOSTS_DIR, LEASES_DIR, TLS_DIR, BLOCKLISTS_DIR):
+    for d in (STATE_DIR, CONF_DIR, HOSTS_DIR, LEASES_DIR, TLS_DIR, BLOCKLISTS_DIR,
+              CHANGELOG_DIR):
         os.makedirs(d, exist_ok=True)
     # State and certs are private to the app user; render/ must be readable by
     # dnsmasq (root).
-    for d in (STATE_DIR, TLS_DIR, BLOCKLISTS_DIR):
+    for d in (STATE_DIR, TLS_DIR, BLOCKLISTS_DIR, CHANGELOG_DIR):
         try:
             os.chmod(d, 0o700)
         except OSError:

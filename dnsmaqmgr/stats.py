@@ -177,7 +177,7 @@ def start_ticker():
 
     def loop():
         from .core import history
-        from . import blocklists
+        from . import blocklists, alerts
         while True:
             time.sleep(TICK_SECONDS)
             try:
@@ -188,6 +188,10 @@ def start_ticker():
                 blocklists.refresh_due()
             except Exception as e:
                 print('blocklist refresh tick failed: %s' % e, flush=True)
+            try:
+                alerts.tick()
+            except Exception as e:
+                print('alerts tick failed: %s' % e, flush=True)
 
     threading.Thread(target=loop, daemon=True).start()
 

@@ -530,6 +530,11 @@ def apply_change(mutate, sections=('settings',), from_mirror=False):
         for n in set(sections) & set(store_names):
             data = load_store(n)
             bump_serial(n, data)
+        from . import changelog
+        changelog.record(sections=sections, action=action, changed=changed,
+                         before=snapshot,
+                         after={n: load_store(n) for n in store_names},
+                         rendered=rendered, from_mirror=from_mirror)
 
     ctl = get_controller()
     service_ok, detail = True, ''

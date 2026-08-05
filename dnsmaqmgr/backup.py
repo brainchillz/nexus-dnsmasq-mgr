@@ -30,7 +30,7 @@ from .dnsmasq import apply_change
 
 bp = Blueprint('backup', __name__)
 
-BACKUP_STORES = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists', 'peers')
+BACKUP_STORES = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists', 'alerts', 'peers')
 # Settings keys outside settings._validated's remit, restored explicitly.
 SETTINGS_TOGGLES = ('dns_enabled', 'dhcp_enabled', 'mirror_accept')
 
@@ -190,8 +190,17 @@ def _staged_accounts(src):
     return {'users': users, 'tokens': tokens}
 
 
+def _staged_alerts(src):
+    from . import alerts as alerts_mod
+    cfg, e = alerts_mod._validate_config(src, copy.deepcopy(DEFAULTS['alerts']))
+    if e:
+        raise ValueError('alerts: %s' % e)
+    return cfg
+
+
 STAGERS = {'settings': _staged_settings, 'dns': _staged_dns, 'dhcp': _staged_dhcp,
-           'netboot': _staged_netboot, 'blocklists': _staged_blocklists}
+           'netboot': _staged_netboot, 'blocklists': _staged_blocklists,
+           'alerts': _staged_alerts}
 
 
 @bp.route('/api/backup/restore', methods=['POST'])
@@ -224,6 +233,10 @@ def backup_restore():
     if not staged and not staged_peers and not staged_accounts:
         return err('Backup contains nothing to restore', 422)
 
+    # alerts is outside apply_change's rollback snapshot — write it only after
+    # the apply holds, alongside peers/accounts.
+    staged_alerts = staged.pop('alerts', None)
+
     def mutate():
         for name, data in staged.items():
             save_store(name, data)
@@ -233,6 +246,8 @@ def backup_restore():
         return res
 
     # Outside the apply snapshot — written only after the config swap held.
+    if staged_alerts is not None:
+        save_store('alerts', staged_alerts)
     if staged_peers is not None:
         save_store('peers', staged_peers)
     if staged_accounts is not None:
@@ -247,7 +262,9 @@ def backup_restore():
         threading.Thread(target=bl_mod.refresh_due, daemon=True).start()
 
     return jsonify({'success': True,
-                    'restored': sorted(staged) + (['peers'] if staged_peers else []),
+                    'restored': sorted(staged)
+                    + (['alerts'] if staged_alerts is not None else [])
+                    + (['peers'] if staged_peers else []),
                     'accounts_restored': staged_accounts is not None,
                     'blocklists_refreshing': bool(staged.get('blocklists', {}).get('lists')),
                     **res})

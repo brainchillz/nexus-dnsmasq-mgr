@@ -54,10 +54,15 @@ def client(monkeypatch):
 def clean_state():
     """Fresh stores for every test."""
     import glob
-    from dnsmaqmgr.core.config import STATE_DIR, RENDER_DIR
+    from dnsmaqmgr.core.config import (STATE_DIR, RENDER_DIR, CHANGELOG_DIR,
+                                       LEASES_FILE)
     yield
     for p in glob.glob(os.path.join(STATE_DIR, '*.json')):
         os.remove(p)
+    for p in glob.glob(os.path.join(CHANGELOG_DIR, '*.json')):
+        os.remove(p)
+    if os.path.exists(LEASES_FILE):
+        os.remove(LEASES_FILE)
     for root, _dirs, files in os.walk(RENDER_DIR):
         for f in files:
             os.remove(os.path.join(root, f))

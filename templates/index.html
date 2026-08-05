@@ -25,6 +25,9 @@
   <symbol id="i-pulse" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></symbol>
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
   <symbol id="i-warn" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+  <symbol id="i-cross" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></symbol>
 </defs></svg>
 <div id="login-screen" style="display:none">
   <form class="login-box" onsubmit="doLogin(event)">
@@ -50,10 +53,12 @@
     <li><a href="#" data-page="dns"><svg class="ico"><use href="#i-glb"/></svg> DNS Overrides</a></li>
     <li><a href="#" data-page="blocklists"><svg class="ico"><use href="#i-shield"/></svg> Blocklists</a></li>
     <li><a href="#" data-page="lookup"><svg class="ico"><use href="#i-search"/></svg> Lookup</a></li>
+    <li><a href="#" data-page="recon"><svg class="ico"><use href="#i-cross"/></svg> Network Scan</a></li>
     <li><a href="#" data-page="dhcp"><svg class="ico"><use href="#i-swap"/></svg> DHCP</a></li>
     <li><a href="#" data-page="netboot"><svg class="ico"><use href="#i-power"/></svg> Network Boot</a></li>
     <li><a href="#" data-page="querylog"><svg class="ico"><use href="#i-pulse"/></svg> Query Log</a></li>
     <li><a href="#" data-page="stats"><svg class="ico"><use href="#i-chart"/></svg> Statistics</a></li>
+    <li><a href="#" data-page="history"><svg class="ico"><use href="#i-clock"/></svg> History</a></li>
     <li class="nav-admin-only"><a href="#" data-page="peers"><svg class="ico"><use href="#i-repeat"/></svg> Mirroring</a></li>
     <li><a href="#" data-page="config"><svg class="ico"><use href="#i-file"/></svg> Config</a></li>
     <li class="nav-admin-only"><a href="#" data-page="settings"><svg class="ico"><use href="#i-sli"/></svg> Settings</a></li>
@@ -86,6 +91,8 @@
 <script src="/static/js/lookup.js"></script>
 <script src="/static/js/querylog.js"></script>
 <script src="/static/js/blocklists.js"></script>
+<script src="/static/js/history.js"></script>
+<script src="/static/js/recon.js"></script>
 <script src="/static/js/dhcp.js"></script>
 <script src="/static/js/netboot.js"></script>
 <script src="/static/js/stats.js"></script>

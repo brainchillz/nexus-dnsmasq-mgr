@@ -4,11 +4,12 @@ async function page_settings() {
     $('page-content').innerHTML = '<h2>Settings</h2><div class="alert alert-warning">Administrator access required.</div>';
     return;
   }
-  const [s, tlsInfo, users, tokens] = await Promise.all([
+  const [s, tlsInfo, users, tokens, alerts] = await Promise.all([
     API.get('/api/settings'),
     API.get('/api/tls/info').catch(() => ({ present: false })),
     API.get('/api/users').catch(() => []),
     API.get('/api/tokens').catch(() => []),
+    API.get('/api/alerts').catch(() => null),
   ]);
 
   const flag = (id, label, val, help) => `
@@ -91,6 +92,40 @@ async function page_settings() {
       <tbody>${tokenRows || '<tr><td colspan="5">No API tokens</td></tr>'}</tbody></table>
     <p class="help">Tokens authenticate automation (<code>Authorization: Bearer dm_…</code>). Read-only tokens can GET everything; admin tokens can change config.</p>
 
+    ${alerts ? `
+    <h3 style="margin-top:24px">Alerts ${icon('bell', 'ico-sm')}</h3>
+    <div class="card" style="max-width:640px">
+      <p class="help">Checked every 5 minutes with the stats tick: a never-seen MAC takes a lease, a DHCP pool
+        crosses the threshold, dnsmasq stops/restarts, or the web certificate nears expiry.</p>
+      ${flag('al-enabled', 'Enable alert delivery', alerts.enabled)}
+      <div class="form-group"><label>Webhook URL</label>
+        <input id="al-url" class="form-control" value="${escapeHtml(alerts.webhook_url || '')}" placeholder="https://ntfy.sh/mytopic or https://hooks.slack.com/…" spellcheck="false"></div>
+      <div class="form-group"><label>Payload format</label>
+        <select id="al-format" class="form-control">
+          ${['generic', 'ntfy', 'slack'].map(f => `<option value="${f}" ${alerts.format === f ? 'selected' : ''}>${f}</option>`).join('')}
+        </select></div>
+      ${flag('al-ev-new', 'New device on LAN (unknown MAC took a lease)', alerts.events.new_device)}
+      ${flag('al-ev-pool', 'DHCP pool utilization above threshold', alerts.events.pool_high)}
+      ${flag('al-ev-svc', 'dnsmasq down or restarted', alerts.events.service_down)}
+      ${flag('al-ev-cert', 'Web TLS certificate nearing expiry', alerts.events.cert_expiry)}
+      <div class="form-group" style="max-width:220px"><label>Pool threshold (%)</label>
+        <input id="al-pool" class="form-control" type="number" min="50" max="100" value="${alerts.pool_threshold}"></div>
+      <div class="form-group" style="max-width:220px"><label>Cert warning window (days)</label>
+        <input id="al-cert" class="form-control" type="number" min="1" max="90" value="${alerts.cert_days}"></div>
+      <div class="toolbar" style="margin-top:8px">
+        <button class="btn" onclick="alertsSave()">Save alerts</button>
+        <button class="btn btn-outline" onclick="alertsTest(this)">Send test alert</button>
+      </div>
+      ${(alerts.recent || []).length ? `
+        <h4 style="margin-top:14px">Recent alerts</h4>
+        <table class="table">${alerts.recent.slice(0, 8).map(a => `<tr>
+          <td style="white-space:nowrap" class="help">${fmtTs(a.ts)}</td>
+          <td><span class="badge-type">${escapeHtml(a.event)}</span></td>
+          <td>${escapeHtml(a.message)}</td>
+          <td>${a.delivered ? '<span class="status-badge green">sent</span>' : `<span class="status-badge red" title="${escapeHtml(a.detail || '')}">failed</span>`}</td>
+        </tr>`).join('')}</table>` : ''}
+    </div>` : ''}
+
     <h3 style="margin-top:24px">Backup &amp; Restore</h3>
     <div class="card" style="max-width:640px">
       <p class="help">One JSON file with the full configuration — DNS, DHCP, netboot, blocklist subscriptions and
@@ -103,6 +138,37 @@ async function page_settings() {
         <button class="btn btn-outline" onclick="restoreModal()">${icon('ul', 'ico-sm')} Restore from backup…</button>
       </div>
     </div>`;
+}
+
+// ─── Alerts ─────────────────────────────────────────────
+async function alertsSave() {
+  const body = {
+    enabled: $('al-enabled').checked,
+    webhook_url: $('al-url').value.trim(),
+    format: $('al-format').value,
+    events: {
+      new_device: $('al-ev-new').checked,
+      pool_high: $('al-ev-pool').checked,
+      service_down: $('al-ev-svc').checked,
+      cert_expiry: $('al-ev-cert').checked,
+    },
+    pool_threshold: parseInt($('al-pool').value) || 90,
+    cert_days: parseInt($('al-cert').value) || 14,
+  };
+  try {
+    await API.post('/api/alerts', body);
+    alert('Alert settings saved.');
+    page_settings();
+  } catch (e) { alert(e.message); }
+}
+
+async function alertsTest(btn) {
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await API.post('/api/alerts/test', {});
+    alert('Test alert delivered — check your webhook target.');
+  } catch (e) { alert(e.message); }
+  btn.disabled = false; btn.textContent = 'Send test alert';
 }
 
 // ─── Backup & restore ───────────────────────────────────
