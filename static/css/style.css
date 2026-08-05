@@ -163,6 +163,11 @@ body.readonly .nav-admin-only { display: none !important; }
 
 /* ─── Cards ───────────────────────────── */
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 20px; }
+/* Grid children default to min-width:auto, so a card holding an unbreakable
+   string (long domain names in the Query Log top tables) overflows into its
+   neighbors instead of shrinking. Let cards shrink, and wrap long tokens. */
+.cards > .card { min-width: 0; }
+.card .table td { overflow-wrap: anywhere; }
 .card {
   background: var(--card-bg);
   border: 1px solid var(--border);
