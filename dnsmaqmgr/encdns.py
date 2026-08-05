@@ -98,12 +98,24 @@ def _source_block(name):
     ]
 
 
-def render_proxy_config(cfg):
+def _pre21(version):
+    """True when the proxy predates 2.1 (e.g. Ubuntu 24.04 LTS ships 2.0.45).
+    Unknown TOML keys are fatal to dnscrypt-proxy, so rendering must match the
+    installed generation. Unknown/unparsable version → assume current."""
+    try:
+        maj, minor = (int(x) for x in str(version).split('.')[:2])
+    except (TypeError, ValueError):
+        return False
+    return (maj, minor) < (2, 1)
+
+
+def render_proxy_config(cfg, version=None):
     """dnscrypt-proxy.toml from the encdns store. Every interpolated value is
     validated on the way into the store (RE_SERVER_NAME / int port), so plain
     string formatting cannot leak TOML syntax."""
     relay = (cfg.get('mode') or 'direct') == 'relay'
     port = int(cfg.get('listen_port') or 5335)
+    old = _pre21(version)
     lines = [
         '# Managed by DNSMAQ-MGR — do not edit; changes are overwritten on every apply.',
         "listen_addresses = ['127.0.0.1:%d']" % port,
@@ -114,7 +126,7 @@ def render_proxy_config(cfg):
         'dnscrypt_servers = true',
         # Relay mode is DNSCrypt-only: anonymized routing cannot wrap DoH.
         'doh_servers = %s' % ('false' if relay else 'true'),
-        'odoh_servers = false',
+    ] + ([] if old else ['odoh_servers = false']) + [
         'require_dnssec = false',
         'require_nolog = false',
         'require_nofilter = false',
@@ -124,7 +136,9 @@ def render_proxy_config(cfg):
         'cert_refresh_delay = 240',
         # Bootstrap: resolving the resolver-list hosts themselves is plaintext
         # on first start — there is no chicken-and-egg-free alternative.
-        "bootstrap_resolvers = ['9.9.9.9:53', '1.1.1.1:53']",
+        # (Renamed from fallback_resolvers in 2.1.)
+        "%s = ['9.9.9.9:53', '1.1.1.1:53']"
+        % ('fallback_resolvers' if old else 'bootstrap_resolvers'),
         'ignore_system_dns = true',
         'netprobe_timeout = 60',
         "netprobe_address = '9.9.9.9:53'",
@@ -260,7 +274,7 @@ def sync_proxy():
     if not binary_path():
         return False, ('%s is not installed — encrypted upstream cannot start'
                        % DNSCRYPT_BIN)
-    text = render_proxy_config(cfg)
+    text = render_proxy_config(cfg, proxy_version())
     try:
         with open(ENCDNS_CONF) as f:
             changed = f.read() != text
@@ -347,7 +361,8 @@ def encdns_save():
         if not binary_path():
             return err('dnscrypt-proxy is not installed on this host — '
                        'install it (apt install dnscrypt-proxy) and retry')
-        ok, output = check_proxy_config(render_proxy_config(cfg))
+        ver = proxy_version()
+        ok, output = check_proxy_config(render_proxy_config(cfg, ver))
         if not ok:
             return err('dnscrypt-proxy rejected the configuration: %s' % output)
 
@@ -360,7 +375,7 @@ def encdns_save():
     # the NEW config before dnsmasq is re-pointed at it; on a rejected apply
     # the store is rolled back and sync_proxy() below reverts the proxy too.
     if cfg.get('enabled'):
-        write_text_atomic(ENCDNS_CONF, render_proxy_config(cfg), 0o600)
+        write_text_atomic(ENCDNS_CONF, render_proxy_config(cfg, ver), 0o600)
         ctl = get_proxy()
         ok, detail = ctl.restart() if ctl.status()['running'] else ctl.start()
         if not ok:

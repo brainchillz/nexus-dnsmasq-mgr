@@ -95,6 +95,22 @@ def test_proxy_toml_relay():
     assert "via=['anon-cs-fr', 'anon-serbica']" in text
 
 
+def test_proxy_toml_pre21_compat():
+    """Ubuntu 24.04 ships dnscrypt-proxy 2.0.45; unknown TOML keys are fatal,
+    so the render must speak that generation's dialect."""
+    old = encdns.render_proxy_config(_cfg(enabled=True, providers=['quad9']),
+                                     version='2.0.45')
+    assert 'fallback_resolvers =' in old
+    assert 'bootstrap_resolvers' not in old
+    assert 'odoh_servers' not in old
+    new = encdns.render_proxy_config(_cfg(enabled=True, providers=['quad9']),
+                                     version='2.1.8')
+    assert 'bootstrap_resolvers =' in new and 'odoh_servers = false' in new
+    # unknown version → current dialect
+    assert 'bootstrap_resolvers =' in encdns.render_proxy_config(
+        _cfg(enabled=True, providers=['quad9']))
+
+
 def test_proxy_toml_custom_servers_and_port():
     text = encdns.render_proxy_config(_cfg(enabled=True, providers=[],
                                            custom_servers=['my-resolver'],
