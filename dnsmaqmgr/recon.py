@@ -166,11 +166,13 @@ def _run_scan(targets, truncated):
                 if ok:
                     alive.add(ip)
         neigh = neighbor_table()
-        result = cross_reference(alive, neigh, load_store('dns').get('hosts', []),
-                                 parse_leases(), load_store('settings'))
-        result.update({'ts': int(started), 'duration': round(time.time() - started, 1),
-                       'targets': len(targets), 'truncated': truncated})
-        save_store('recon', {'last': result})
+        # Store the RAW scan data; the hygiene report is recomputed on read so
+        # fixing a finding (e.g. creating a record for an unnamed device)
+        # updates the report immediately, without a rescan.
+        save_store('recon', {'last': {
+            'ts': int(started), 'duration': round(time.time() - started, 1),
+            'targets': len(targets), 'truncated': truncated,
+            'alive_ips': sorted(alive), 'neigh': neigh}})
     except Exception as e:
         print('recon scan failed: %s' % e, flush=True)
     finally:
@@ -182,7 +184,14 @@ def _run_scan(targets, truncated):
 def recon_get():
     with _state_lock:
         status = dict(_scan)
-    return jsonify({**status, 'last': load_store('recon').get('last')})
+    last = load_store('recon').get('last')
+    if last and 'alive_ips' in last:
+        result = cross_reference(set(last['alive_ips']), last.get('neigh') or {},
+                                 load_store('dns').get('hosts', []),
+                                 parse_leases(), load_store('settings'))
+        result.update({k: last.get(k) for k in ('ts', 'duration', 'targets', 'truncated')})
+        last = result
+    return jsonify({**status, 'last': last})
 
 
 @bp.route('/api/recon/scan', methods=['POST'])

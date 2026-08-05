@@ -78,6 +78,30 @@ def test_scan_api_roundtrip(client, monkeypatch):
     assert last['unnamed_devices'] == []       # 10.0.0.5 has a record
 
 
+def test_create_record_clears_unnamed_without_rescan(client):
+    """The scan stores raw data and the report recomputes on read — naming a
+    device (the '+ Create record' flow) removes it from the findings
+    immediately, no rescan needed."""
+    from dnsmaqmgr.core.store import save_store
+    save_store('recon', {'last': {
+        'ts': 1, 'duration': 0.5, 'targets': 3, 'truncated': False,
+        'alive_ips': ['192.168.35.248'],
+        'neigh': {'192.168.35.248': 'aa:bb:cc:dd:ee:48'}}})
+
+    st = client.get('/api/recon').json
+    assert [d['ip'] for d in st['last']['unnamed_devices']] == ['192.168.35.248']
+    assert st['last']['unnamed_devices'][0]['mac'] == 'aa:bb:cc:dd:ee:48'
+
+    r = client.post('/api/dns/hosts', json={'name': 'switch-rack1.lan',
+                                            'a': '192.168.35.248',
+                                            'comment': 'network — core switch'})
+    assert r.json['success']
+
+    st = client.get('/api/recon').json
+    assert st['last']['unnamed_devices'] == []
+    assert st['last']['targets'] == 3      # scan metadata carried through
+
+
 def test_scan_requires_targets(client):
     assert client.post('/api/recon/scan', json={}).status_code == 400
 
