@@ -247,7 +247,6 @@ async function page_overview() {
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:6px">
         <div style="display:flex;justify-content:space-between;align-items:center"><span>DNS server</span>${switchHtml(st.dns_enabled, "toggleFeature('dns_enabled', this.checked)", !admin)}</div>
         <div style="display:flex;justify-content:space-between;align-items:center"><span>DHCP server</span>${switchHtml(st.dhcp_enabled, "toggleFeature('dhcp_enabled', this.checked)", !admin)}</div>
-        <div style="display:flex;justify-content:space-between;align-items:center"><span>TFTP (netboot)</span>${switchHtml(st.tftp_enabled, "netbootQuickToggle(this.checked)", !admin)}</div>
       </div>
     </div>`;
 
@@ -322,15 +321,6 @@ async function fillOverviewSparks() {
     try { const h = await API.get(`/api/history?metric=${metric}&since=86400`); el.innerHTML = sparkline(h.points); }
     catch (e) {}
   }
-}
-
-// Quick TFTP toggle from the Overview features card.
-async function netbootQuickToggle(enabled) {
-  try {
-    const r = await API.post('/api/netboot/settings', { tftp_enabled: enabled });
-    notifyApply(r);
-  } catch (e) { alert(e.message); }
-  page_overview();
 }
 
 // ─── Authentication ─────────────────────────────────────
