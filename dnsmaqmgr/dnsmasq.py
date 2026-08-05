@@ -25,10 +25,11 @@ from collections import deque
 from flask import Blueprint, jsonify
 
 from .core.config import (RENDER_DIR, CONF_DIR, MANAGED_HOSTS, DHCP_HOSTS_FILE,
-                          DHCP_OPTS_FILE, LEASES_FILE, DNSMASQ_BIN,
-                          DNSMASQ_UNIT, SUPERVISE, write_text_atomic)
+                          DHCP_OPTS_FILE, LEASES_FILE, BLOCKLISTS_DIR,
+                          DNSMASQ_BIN, DNSMASQ_UNIT, SUPERVISE, write_text_atomic)
 from .core.runcmd import run, err
 from .core.store import STORE_LOCK, load_store, save_store, bump_serial
+from .core.validators import RE_DOMAIN
 
 bp = Blueprint('dnsmasqctl', __name__)
 
@@ -101,8 +102,12 @@ def render_main(settings):
     return '\n'.join(lines) + '\n'
 
 
-def render_dns(dns):
+def render_dns(dns, settings=None):
     lines = [HEADER, 'addn-hosts=%s' % MANAGED_HOSTS]
+    if (settings or {}).get('no_hosts'):
+        # Serve only managed records: ignore the system /etc/hosts, whose stray
+        # entries are invisible to the app and shadow the managed hosts file.
+        lines.append('no-hosts')
     for rec in _enabled(dns.get('addresses', [])):
         lines.append('address=/%s/%s' % (rec['domain'], rec['ip']))
     for rec in _enabled(dns.get('cnames', [])):
@@ -220,14 +225,42 @@ def render_extra(settings):
     return HEADER + (text.rstrip('\n') + '\n' if text.strip() else '# (no extra options)\n')
 
 
+BLOCKLIST_CONF_PREFIX = 'dnsmasq.d/50-block-'
+
+
+def blocklist_domains_path(list_id):
+    return os.path.join(BLOCKLISTS_DIR, '%s.domains' % list_id)
+
+
+def render_blocklist(rec):
+    """One conf file per subscribed list, from its fetched domains file.
+    Domains are validated at fetch time; RE_DOMAIN is re-checked here so a
+    tampered domains file still can't smuggle directives into the config."""
+    lines = [HEADER, '# Blocklist: %s (%s)' % (rec.get('name', ''), rec.get('url', ''))]
+    try:
+        with open(blocklist_domains_path(rec['id'])) as f:
+            for raw in f:
+                dom = raw.strip()
+                if dom and RE_DOMAIN.match(dom):
+                    lines.append('address=/%s/0.0.0.0' % dom)
+    except OSError:
+        lines.append('# (not fetched yet)')
+    return '\n'.join(lines) + '\n'
+
+
 def render_all(stores=None):
     """Render every managed file. Returns {relpath-under-RENDER_DIR: text}."""
+    store_names = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists')
     if stores is None:
-        stores = {name: load_store(name) for name in ('settings', 'dns', 'dhcp', 'netboot')}
+        stores = {name: load_store(name) for name in store_names}
+    else:
+        stores = dict(stores)
+        for name in store_names:   # older callers pass only the original four
+            stores.setdefault(name, load_store(name))
     s, d, h, n = stores['settings'], stores['dns'], stores['dhcp'], stores['netboot']
-    return {
+    rendered = {
         'dnsmasq.d/00-main.conf': render_main(s),
-        'dnsmasq.d/10-dns.conf': render_dns(d),
+        'dnsmasq.d/10-dns.conf': render_dns(d, s),
         'dnsmasq.d/20-dhcp.conf': render_dhcp(h, s),
         'dnsmasq.d/30-boot.conf': render_boot(n, s),
         'dnsmasq.d/90-extra.conf': render_extra(s),
@@ -235,6 +268,9 @@ def render_all(stores=None):
         'dhcp-hosts': render_dhcp_hosts(h, s),
         'dhcp-opts': render_dhcp_opts(h, s),
     }
+    for rec in _enabled(stores['blocklists'].get('lists', [])):
+        rendered['%s%s.conf' % (BLOCKLIST_CONF_PREFIX, rec['id'])] = render_blocklist(rec)
+    return rendered
 
 
 # ─── Validation ────────────────────────────────────────────────────────
@@ -296,6 +332,25 @@ def write_render(rendered):
         write_text_atomic(path, text, 0o644)
 
 
+def prune_blocklist_confs(rendered):
+    """Remove rendered blocklist conf files whose list was deleted/disabled —
+    dnsmasq globs the whole conf-dir, so a stray file would stay live forever.
+    Only blocklist confs are pruned; `rendered` must be a FULL render_all().
+    Returns the pruned relpaths (a removal needs a restart, which diff_render
+    cannot see — it only compares files that are still in the render set)."""
+    keep = {os.path.join(RENDER_DIR, rel) for rel in rendered
+            if rel.startswith(BLOCKLIST_CONF_PREFIX)}
+    removed = []
+    for path in glob.glob(os.path.join(RENDER_DIR, BLOCKLIST_CONF_PREFIX + '*.conf')):
+        if path not in keep:
+            try:
+                os.remove(path)
+                removed.append(os.path.relpath(path, RENDER_DIR))
+            except OSError:
+                pass
+    return removed
+
+
 def ensure_render():
     """First boot: materialize the rendered config so dnsmasq has something to
     read before the first UI edit. Never overwrites existing files."""
@@ -304,6 +359,7 @@ def ensure_render():
                if not os.path.exists(os.path.join(RENDER_DIR, rel))}
     if missing:
         write_render(missing)
+    prune_blocklist_confs(rendered)
 
 
 # ─── Service controllers ──────────────────────────────────────────────
@@ -344,7 +400,9 @@ class ChildController:
     def __init__(self):
         self._proc = None
         self._lock = threading.RLock()
-        self._log = deque(maxlen=500)
+        # 2000 lines ≈ a useful query-log window with log-queries on, and only
+        # a few hundred KB when it isn't.
+        self._log = deque(maxlen=2000)
         self._stopping = False
         self._backoff = 1
 
@@ -454,7 +512,7 @@ def apply_change(mutate, sections=('settings',), from_mirror=False):
     On success returns a dict {action, changed, service_ok, ...} for the route
     to merge into its JSON response.
     """
-    store_names = ('settings', 'dns', 'dhcp', 'netboot')
+    store_names = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists')
     with STORE_LOCK:
         snapshot = {n: copy.deepcopy(load_store(n)) for n in store_names}
         mutate()
@@ -466,6 +524,9 @@ def apply_change(mutate, sections=('settings',), from_mirror=False):
             return err('dnsmasq rejected the configuration: %s' % output, 400)
         action, changed = diff_render(rendered)
         write_render(rendered)
+        pruned = prune_blocklist_confs(rendered)
+        if pruned:
+            action, changed = 'restart', changed + pruned
         for n in set(sections) & set(store_names):
             data = load_store(n)
             bump_serial(n, data)
@@ -534,6 +595,7 @@ def dnsmasq_apply():
         if not ok:
             return err('dnsmasq rejected the configuration: %s' % output, 400)
         write_render(rendered)
+        prune_blocklist_confs(rendered)
     service_ok, detail = get_controller().restart()
     return jsonify({'success': True, 'service_ok': service_ok, 'service_detail': detail})
 

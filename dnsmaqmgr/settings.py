@@ -12,7 +12,8 @@ MAX_EXTRA = 20000
 
 # Simple boolean settings applied verbatim.
 BOOL_KEYS = ('expand_hosts', 'bind_interfaces', 'no_resolv', 'domain_needed',
-             'bogus_priv', 'dnssec', 'dhcp_authoritative', 'log_queries', 'log_dhcp')
+             'bogus_priv', 'dnssec', 'dhcp_authoritative', 'log_queries', 'log_dhcp',
+             'no_hosts')
 
 # Never sent to the browser.
 PRIVATE_KEYS = ('mirror_token_hash',)

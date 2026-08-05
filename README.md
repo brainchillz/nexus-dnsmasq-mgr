@@ -39,6 +39,41 @@ own `dnsmasq.conf` is never touched. Every change is:
   and the global **upstream resolvers**.
 - Optional DNSSEC validation, `domain-needed`, `bogus-priv`, cache size,
   query logging.
+- **`no-hosts` toggle** — by default dnsmasq also answers from the machine's
+  `/etc/hosts`, which the app does not manage; one switch serves managed
+  records only.
+
+### Blocklists
+- **Subscribe to a blocklist URL** (StevenBlack, hagezi, …) with per-list
+  enable/disable, entry counts and a refresh interval; lists auto-refresh on
+  the stats tick and can be refreshed manually.
+- Accepts hosts-format (`0.0.0.0 domain`), plain-domain, dnsmasq `address=`
+  and adblock `||domain^` lists — mixed freely; every domain is validated
+  before it can reach the config.
+- **Each list renders into its own conf file** of `address=/domain/0.0.0.0`
+  lines, and `dnsmasq --test` gates the swap — a broken or hostile download
+  can never take out the rest of the configuration.
+
+### Lookup & diagnosis
+- **One-click "where did that answer come from?"** — query the running
+  dnsmasq for a name and every answer is attributed to its source: managed
+  host record / override / CNAME, blocklist, the system `/etc/hosts` (file
+  and line number), a foreign `dnsmasq.d` file, a DHCP lease hostname, or
+  upstream/cache. Answers from outside the app's managed data are flagged
+  **"not managed by me"**.
+- Warns in the other direction too: a managed record the server did *not*
+  return is called out as possibly shadowed.
+- **Shadowing audit** — every managed host name is checked against
+  `/etc/hosts` and foreign dnsmasq config; conflicts surface as a warning
+  banner on the DNS and Lookup pages.
+
+### Query log
+- With query logging enabled, a **live view** over dnsmasq's own log: recent
+  queries with per-query resolution (which upstream answered, cache/config/
+  hosts source, blocked, NXDOMAIN), plus top domains, top clients, top
+  blocked names and per-upstream counts. Polls every 5 s; no extra daemon and
+  no persistent query database — it reads the journal (bare metal) or the
+  supervised child's ring buffer (Docker).
 
 ### DHCP
 - **Pools/ranges** with tag or per-interface scoping, netmask and lease time.
@@ -116,6 +151,17 @@ pinning, last-sync status — works the same.
   0600, never echoed back by the API). UniFi's scoped API keys don't reach the
   Network application's Static DNS endpoint, so there is no token option; use
   a local admin with MFA disabled, since 2FA logins can't be automated.
+
+### Backup & restore
+- **Single-JSON export** of the full state — settings, DNS, DHCP, netboot,
+  blocklist subscriptions, mirroring peers — with accounts/API tokens
+  (hashes) optional. Makes bare-metal ↔ Docker migrations a download and an
+  upload.
+- **All-or-nothing restore**: every record is re-validated with the same
+  validators the UI uses and the whole set goes through the
+  render → `dnsmasq --test` → atomic-swap pipeline; an invalid backup
+  changes nothing. Blocklist data is re-fetched from the list URLs after a
+  restore.
 
 ### Web UI & security
 - HTTPS out of the box with a **self-signed certificate generated on first
@@ -236,6 +282,28 @@ mutating endpoints require an admin identity. Errors are
 Record shapes: hosts `{name, a?, aaaa?}` · cnames `{alias, target}` ·
 addresses `{domain, ip}` · forwards `{domain, upstream}` — all plus
 `{enabled, comment}`.
+
+### Lookup & query log
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/lookup?name=` | resolve via the running dnsmasq; answers carry `source: {kind, detail, managed, warn}` (kinds: `host`, `override`, `cname`, `blocklist`, `forward`, `etc-hosts`, `foreign-conf`, `lease`, `upstream`) plus shadowing `warnings[]` |
+| GET | `/api/lookup/audit` | managed names shadowed by `/etc/hosts` / foreign conf → `conflicts[]` |
+| GET | `/api/querylog` | parsed query-log window: `entries[]` + top domains/clients/blocked, upstream and NXDOMAIN counts (`enabled: false` when `log-queries` is off) |
+
+### Blocklists
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/blocklists` | subscribed lists with entry counts and fetch state |
+| POST | `/api/blocklists` | subscribe `{name, url, refresh_hours?, enabled?}` — fetches immediately, response carries `fetch_ok`/`entries` |
+| POST | `/api/blocklists/<id>` | update (a changed URL refetches) |
+| POST | `/api/blocklists/<id>/refresh` | fetch now |
+| DELETE | `/api/blocklists/<id>` | unsubscribe (conf file pruned) |
+
+### Backup & restore (admin only)
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/backup?include_accounts=1` | full-state JSON download (accounts optional) |
+| POST | `/api/backup/restore` | `{backup, include_accounts?}` — all-or-nothing, re-validated, `dnsmasq --test`-gated |
 
 ### DHCP
 | Method | Path | Purpose |

@@ -52,8 +52,10 @@ async function page_settings() {
       ${flag('st-bogus', 'Bogus-priv (never forward private-range reverse lookups)', s.bogus_priv)}
       ${flag('st-dnssec', 'DNSSEC validation', s.dnssec)}
       ${flag('st-auth', 'DHCP authoritative (this is the only DHCP server on the LAN)', s.dhcp_authoritative)}
-      ${flag('st-logq', 'Log DNS queries (verbose — journal/container log)', s.log_queries)}
+      ${flag('st-logq', 'Log DNS queries (verbose — feeds the Query Log page)', s.log_queries)}
       ${flag('st-logd', 'Log DHCP transactions', s.log_dhcp)}
+      ${flag('st-nohosts', 'Ignore the system /etc/hosts (no-hosts — serve only managed host records)', s.no_hosts,
+             'By default dnsmasq also answers from the /etc/hosts of this machine, which this app does not manage. Stray entries there can shadow managed records — the Lookup page can diagnose that.')}
       <div class="toolbar" style="margin-top:10px"><button class="btn" onclick="stSave()">Save &amp; Apply</button></div>
     </div>
 
@@ -87,7 +89,60 @@ async function page_settings() {
     <div class="toolbar"><button class="btn btn-sm" onclick="tokenCreateModal()">+ Create token</button></div>
     <table class="table"><thead><tr><th>Name</th><th>Role</th><th>Created</th><th>Last used</th><th></th></tr></thead>
       <tbody>${tokenRows || '<tr><td colspan="5">No API tokens</td></tr>'}</tbody></table>
-    <p class="help">Tokens authenticate automation (<code>Authorization: Bearer dm_…</code>). Read-only tokens can GET everything; admin tokens can change config.</p>`;
+    <p class="help">Tokens authenticate automation (<code>Authorization: Bearer dm_…</code>). Read-only tokens can GET everything; admin tokens can change config.</p>
+
+    <h3 style="margin-top:24px">Backup &amp; Restore</h3>
+    <div class="card" style="max-width:640px">
+      <p class="help">One JSON file with the full configuration — DNS, DHCP, netboot, blocklist subscriptions and
+        mirroring peers. Handy for bare-metal &harr; Docker migrations. Blocklist domain data is not included;
+        lists are re-fetched from their URLs after a restore.</p>
+      <label class="checkitem" style="padding-left:0"><input id="bk-accounts" type="checkbox">
+        Include user accounts &amp; API tokens (password/token hashes)</label>
+      <div class="toolbar" style="margin-top:8px">
+        <button class="btn" onclick="backupDownload()">${icon('dl', 'ico-sm')} Download backup</button>
+        <button class="btn btn-outline" onclick="restoreModal()">${icon('ul', 'ico-sm')} Restore from backup…</button>
+      </div>
+    </div>`;
+}
+
+// ─── Backup & restore ───────────────────────────────────
+function backupDownload() {
+  window.location = '/api/backup?include_accounts=' + ($('bk-accounts').checked ? '1' : '0');
+}
+
+function restoreModal() {
+  openModal('Restore from backup', `
+    <div class="alert alert-warning"><strong>This replaces the configuration on this node</strong> with the
+      backup's contents and applies it (gated by <code>dnsmasq --test</code> — an invalid backup changes nothing).</div>
+    <div class="form-group"><input type="file" id="rs-file" class="form-control" accept=".json,application/json"></div>
+    <label class="checkitem" style="padding-left:0"><input id="rs-accounts" type="checkbox">
+      Also restore user accounts &amp; API tokens (if present in the backup — may sign you out)</label>
+    <div class="toolbar" style="margin-top:10px"><button class="btn" onclick="restoreGo(this)">Restore</button></div>
+    <div id="rs-result"></div>`);
+}
+
+async function restoreGo(btn) {
+  const f = $('rs-file').files && $('rs-file').files[0];
+  if (!f) { alert('Choose a backup file first'); return; }
+  if (!confirm('Replace the configuration on this node with the backup?')) return;
+  let backup;
+  try { backup = JSON.parse(await f.text()); }
+  catch (e) { alert('Not a valid JSON file'); return; }
+  btn.disabled = true;
+  $('rs-result').innerHTML = '<p class="help">Restoring…</p>';
+  try {
+    const r = await API.post('/api/backup/restore', {
+      backup, include_accounts: $('rs-accounts').checked,
+    });
+    notifyApply(r);
+    $('rs-result').innerHTML = `<div class="health-ok">✓ Restored: ${r.restored.join(', ')}
+      ${r.accounts_restored ? ' · accounts replaced' : ''}
+      ${r.blocklists_refreshing ? ' · blocklists re-fetching in the background' : ''}
+      · applied via ${r.action}</div>
+      <div class="toolbar" style="margin-top:8px"><button class="btn btn-sm" onclick="closeModal(); page_settings();">Done</button></div>`;
+  } catch (e) {
+    $('rs-result').innerHTML = `<div class="alert alert-warning"><strong>Restore failed:</strong> ${escapeHtml(e.message)}</div>`;
+  } finally { btn.disabled = false; }
 }
 
 async function stSave() {
@@ -105,6 +160,7 @@ async function stSave() {
     dhcp_authoritative: $('st-auth').checked,
     log_queries: $('st-logq').checked,
     log_dhcp: $('st-logd').checked,
+    no_hosts: $('st-nohosts').checked,
   };
   try {
     const r = await API.post('/api/settings', body);

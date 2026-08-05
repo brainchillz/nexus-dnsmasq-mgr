@@ -18,12 +18,13 @@ def create_app():
     app.config.update(SESSION_COOKIE_CONFIG)
 
     from .core import auth, tls, history
-    from . import dnsmasq, settings, dns, dhcp, netboot, stats, peers, mirror
+    from . import (dnsmasq, settings, dns, dhcp, netboot, stats, peers, mirror,
+                   lookup, querylog, blocklists, backup)
 
     app.before_request(auth.require_login)
 
     for mod in (auth, tls, history, dnsmasq, settings, dns, dhcp, netboot,
-                stats, peers, mirror):
+                stats, peers, mirror, lookup, querylog, blocklists, backup):
         app.register_blueprint(mod.bp)
 
     @app.route('/')

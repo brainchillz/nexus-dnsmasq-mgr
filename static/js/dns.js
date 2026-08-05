@@ -48,6 +48,7 @@ async function page_dns() {
   $('page-content').innerHTML = `
     <h2>DNS Overrides</h2>
     ${lockedBanner('hosts')}${lockedBanner('dns')}
+    <div id="dns-audit"></div>
     <h3>Host Records <span class="help">(the dnsmasq hosts file: name &rarr; A/AAAA)</span></h3>
     ${canHosts ? `<div class="toolbar">
       <button class="btn btn-sm" onclick="dnsHostModal()">+ Add host record</button>
@@ -78,6 +79,7 @@ async function page_dns() {
       <textarea id="dns-upstreams" class="form-control" rows="3" ${canDns ? '' : 'disabled'}>${escapeHtml((s.upstreams || []).join('\n'))}</textarea>
     </div>
     ${canDns ? `<button class="btn" onclick="dnsSaveUpstreams()">Save upstreams</button>` : ''}`;
+  renderAuditBanner('dns-audit');
 }
 
 function _rec(coll, id) { return (_dnsData[coll] || []).find(r => r.id === id) || {}; }

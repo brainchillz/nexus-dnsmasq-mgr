@@ -25,6 +25,10 @@ RE_ID = re.compile(r'^[a-z]_[0-9a-f]{6}\Z')
 RE_COMMENT = re.compile(r'^[^\r\n]{0,200}\Z')
 RE_ARCH = re.compile(r'^\d{1,3}\Z')
 RE_URL = re.compile(r'^https://[A-Za-z0-9.\[\]:_-]+(:\d{1,5})?\Z')
+# Blocklist source URLs carry paths (raw.githubusercontent.com/...). The URL is
+# rendered into a conf comment line, so no whitespace/quotes — and \S alone
+# would admit them via non-ASCII spaces, hence the explicit char class.
+RE_LIST_URL = re.compile(r'^https?://[A-Za-z0-9.\[\]:_~/%&=?#+-]{1,500}\Z')
 RE_FINGERPRINT = re.compile(r'^[0-9a-f]{64}\Z')
 RE_SOURCE = re.compile(r'^[A-Za-z0-9._-]{1,64}\Z')
 

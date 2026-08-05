@@ -33,6 +33,7 @@ DEFAULTS = {
         'dhcp_authoritative': True,
         'log_queries': False,
         'log_dhcp': False,
+        'no_hosts': False,
         'extra_options': '',
         'mirror_accept': False,
         'mirror_token_hash': None,
@@ -44,6 +45,9 @@ DEFAULTS = {
     # (next-server). The app no longer runs a TFTP file server of its own.
     'netboot': {'serial': 0, 'proxy_dhcp': False, 'proxy_subnet': '',
                 'pxe_prompt': '', 'entries': []},
+    # Blocklist subscriptions: metadata only — the fetched domains live as
+    # one-per-line files under BLOCKLISTS_DIR, keyed by list id.
+    'blocklists': {'serial': 0, 'lists': []},
     'peers': {'peers': []},
     'stats_cursor': {},
 }

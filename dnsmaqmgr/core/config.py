@@ -28,6 +28,13 @@ DHCP_HOSTS_FILE = os.path.join(RENDER_DIR, 'dhcp-hosts')
 DHCP_OPTS_FILE = os.path.join(RENDER_DIR, 'dhcp-opts')
 LEASES_DIR = os.path.join(DATA_DIR, 'leases')
 LEASES_FILE = os.path.join(LEASES_DIR, 'dnsmasq.leases')
+# Fetched blocklist domain files (one validated domain per line, keyed by
+# list id). App-private: only the rendered conf under RENDER_DIR is dnsmasq's.
+BLOCKLISTS_DIR = os.path.join(DATA_DIR, 'blocklists')
+
+# The system hosts file dnsmasq reads by default (`no-hosts` disables that).
+# The lookup/audit tools parse it to attribute answers; overridable for tests.
+ETC_HOSTS = os.environ.get('DNSMAQ_ETC_HOSTS', '/etc/hosts')
 
 
 def env_bool(name, default):
@@ -119,11 +126,11 @@ def write_text_atomic(path, text, mode=0o644):
 
 def ensure_dirs():
     """Create the DATA_DIR tree on first boot (bare metal and Docker volume)."""
-    for d in (STATE_DIR, CONF_DIR, HOSTS_DIR, LEASES_DIR, TLS_DIR):
+    for d in (STATE_DIR, CONF_DIR, HOSTS_DIR, LEASES_DIR, TLS_DIR, BLOCKLISTS_DIR):
         os.makedirs(d, exist_ok=True)
     # State and certs are private to the app user; render/ must be readable by
     # dnsmasq (root).
-    for d in (STATE_DIR, TLS_DIR):
+    for d in (STATE_DIR, TLS_DIR, BLOCKLISTS_DIR):
         try:
             os.chmod(d, 0o700)
         except OSError:

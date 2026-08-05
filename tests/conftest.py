@@ -8,6 +8,10 @@ _tmp = tempfile.mkdtemp(prefix='dnsmaq-test-')
 os.environ['DNSMAQ_DATA_DIR'] = _tmp
 os.environ['DNSMAQ_TLS'] = '0'
 os.environ['DNSMAQ_NO_SUDO'] = '1'
+# Never read the dev machine's real hosts file / dnsmasq config from tests —
+# lookup/audit tests point these at fixtures explicitly.
+os.environ['DNSMAQ_ETC_HOSTS'] = os.path.join(_tmp, 'no-such-hosts')
+os.environ['DNSMAQ_FOREIGN_CONF'] = ''
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
