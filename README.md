@@ -43,6 +43,29 @@ own `dnsmasq.conf` is never touched. Every change is:
   `/etc/hosts`, which the app does not manage; one switch serves managed
   records only.
 
+### Encrypted DNS upstream (opt-in)
+- **Stop leaking every query to the ISP in plaintext**: dnsmasq forwards to a
+  supervised local `dnscrypt-proxy` (loopback high port, no root needed) that
+  speaks DoH/DNSCrypt upstream. Off by default; nothing changes until you
+  turn it on.
+- **Two modes, one setting**: *direct* (proxy → resolver — simplest, fastest,
+  DoH or DNSCrypt) or *anonymized relay* (proxy → relay → resolver, DNSCrypt
+  only — the relay sees your IP but not the queries, the resolver sees the
+  queries but not your IP). Presets for Cloudflare, Quad9, Mullvad and
+  AdGuard, plus free-form server/relay names from the public lists.
+- **Fail-closed by default**: while enabled, the proxy is the *only* upstream
+  — if it dies, resolution stops (and an alert fires) instead of silently
+  falling back to plaintext. An explicit fail-open toggle keeps the plain
+  upstreams as `strict-order` fallbacks for uptime-first setups. Enabling
+  also forces `no-resolv` so `/etc/resolv.conf` can't route around the proxy.
+- Composes with everything else: domain forwards still bypass the proxy
+  (internal names never reach a public resolver), blocklists answer locally,
+  DNSSEC validation still works, and the Query Log / Lookup pages label the
+  loopback hop as "encrypted upstream" instead of a bare address.
+- Honest fine print: this **moves** trust (ISP → resolver operator) or splits
+  it (relay + resolver) — it does not make queries private in absolute terms,
+  and the proxy's own resolver-list bootstrap is plaintext on first start.
+
 ### Blocklists
 - **Subscribe to a blocklist URL** (StevenBlack, hagezi, …) with per-list
   enable/disable, entry counts and a refresh interval; lists auto-refresh on
@@ -166,7 +189,7 @@ pinning, last-sync status — works the same.
 - Checked on the 5-minute stats tick: **new device on LAN** (never-seen MAC
   took a lease), **DHCP pool above threshold** (with hysteresis), **dnsmasq
   down or restarted** (counter-reset detection), **web TLS certificate
-  nearing expiry**.
+  nearing expiry**, **encrypted DNS upstream down or not answering**.
 - One webhook URL, three payload shapes: generic JSON, **ntfy**
   (title/priority/tags headers) or **Slack**-compatible `{"text": …}`.
   Per-event cooldowns; the first enabled tick baselines silently so enabling
@@ -183,7 +206,8 @@ pinning, last-sync status — works the same.
 
 ### Backup & restore
 - **Single-JSON export** of the full state — settings, DNS, DHCP, netboot,
-  blocklist subscriptions, alert config, mirroring peers — with accounts/API
+  blocklist subscriptions, alert config, encrypted-upstream config, mirroring
+  peers — with accounts/API
   tokens (hashes) optional. Makes bare-metal ↔ Docker migrations a download and an
   upload.
 - **All-or-nothing restore**: every record is re-validated with the same
@@ -387,6 +411,12 @@ static_leases `{mac, ip, hostname?, tag?}` · options `{option, value, tag?}`
 | POST | `/api/dnsmasq/restart` | restart dnsmasq |
 | GET | `/api/dnsmasq/logs` | service log tail |
 
+### Encrypted DNS upstream
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/encdns` | config + live status (running/healthy/port), provider catalog, proxy log tail |
+| POST | `/api/encdns` | `{enabled, mode: "direct"\|"relay", providers[], custom_servers[], relays[], fallback_plain, listen_port}` — validated with `dnscrypt-proxy -check` before the apply |
+
 Mutating responses include the apply outcome:
 `{action: "reload"|"restart"|"none", changed: [files], service_ok, service_detail}`.
 
@@ -453,11 +483,13 @@ Environment variables (all optional):
 | `DNSMAQ_DNS_PORT` | `53` | port for CHAOS stats queries (custom `port=` setups) |
 | `DNSMAQ_HISTORY_*` | 3 / 400 / 64 | raw days / daily days / DB size cap MB |
 | `DNSMAQ_AUTH_FILE` | `<data>/auth.json` | credentials store |
+| `DNSMAQ_DNSCRYPT_BIN` | `dnscrypt-proxy` | dnscrypt-proxy binary for the encrypted upstream |
 
 Rendered layout under `<data>/render/` (regenerated on every change —
 never edit by hand; use the Config page's Extra Options for anything the UI
 doesn't cover): `dnsmasq.d/{00-main,10-dns,20-dhcp,30-boot,90-extra}.conf`,
-`hosts.d/managed-hosts`, `dhcp-hosts`, `dhcp-opts`.
+`hosts.d/managed-hosts`, `dhcp-hosts`, `dhcp-opts`. The encrypted upstream's
+`dnscrypt-proxy.toml` and cached resolver lists live under `<data>/encdns/`.
 
 CLI subcommands: `app.py set-password [user]` · `app.py render` (render +
 validate offline) · `app.py history-tick` · `app.py dhcp-probe [iface…]`.

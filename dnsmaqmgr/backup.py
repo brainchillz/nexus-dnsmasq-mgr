@@ -30,7 +30,8 @@ from .dnsmasq import apply_change
 
 bp = Blueprint('backup', __name__)
 
-BACKUP_STORES = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists', 'alerts', 'peers')
+BACKUP_STORES = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists', 'alerts',
+                 'encdns', 'peers')
 # Settings keys outside settings._validated's remit, restored explicitly.
 SETTINGS_TOGGLES = ('dns_enabled', 'dhcp_enabled', 'mirror_accept')
 
@@ -198,9 +199,25 @@ def _staged_alerts(src):
     return cfg
 
 
+def _staged_encdns(src):
+    from . import encdns as encdns_mod
+    cfg, e = encdns_mod.validate_config(src, copy.deepcopy(DEFAULTS['encdns']))
+    if e:
+        raise ValueError('encdns: %s' % e)
+    if cfg.get('enabled') and not encdns_mod.binary_path():
+        # Restoring an enabled encrypted upstream onto a host without the
+        # proxy would leave dnsmasq forwarding to a dead port (fail-closed
+        # = no resolution at all). All-or-nothing beats a silently dark node.
+        raise ValueError('encdns: backup enables the encrypted DNS upstream but '
+                         'dnscrypt-proxy is not installed on this host — install '
+                         'it first, or disable encdns in the backup')
+    cfg['serial'] = int(src.get('serial') or 0)
+    return cfg
+
+
 STAGERS = {'settings': _staged_settings, 'dns': _staged_dns, 'dhcp': _staged_dhcp,
            'netboot': _staged_netboot, 'blocklists': _staged_blocklists,
-           'alerts': _staged_alerts}
+           'alerts': _staged_alerts, 'encdns': _staged_encdns}
 
 
 @bp.route('/api/backup/restore', methods=['POST'])

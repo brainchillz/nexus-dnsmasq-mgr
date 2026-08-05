@@ -31,7 +31,7 @@ from .core.runcmd import err
 
 bp = Blueprint('changelog', __name__)
 
-TRACKED = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists')
+TRACKED = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists', 'encdns')
 # Rendered files snapshotted for diffs — everything except 50-block-*.conf.
 DIFF_EXCLUDE_PREFIX = 'dnsmasq.d/50-block-'
 
@@ -88,7 +88,7 @@ def record(sections, action, changed, before, after, rendered, from_mirror=False
     try:
         if action == 'none' and all(
                 _strip_noise(after.get(n, {})) == _strip_noise(before.get(n, {}))
-                for n in ('settings', 'dns', 'dhcp', 'netboot')):
+                for n in ('settings', 'dns', 'dhcp', 'netboot', 'encdns')):
             # Bookkeeping-only writes (e.g. a blocklist refresh that fetched
             # identical data) would flood the timeline.
             return

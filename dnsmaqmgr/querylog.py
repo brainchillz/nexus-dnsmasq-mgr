@@ -111,6 +111,20 @@ def parse_query_log(lines):
     return entries, aggregates
 
 
+def _label_encdns(entries, aggregates):
+    """When the encrypted upstream is enabled, its loopback address in the
+    upstream columns would read as a mystery — label it for what it is."""
+    enc = load_store('encdns')
+    if not enc.get('enabled'):
+        return
+    addr = '127.0.0.1#%d' % int(enc.get('listen_port') or 5335)
+    label = 'encrypted upstream (%s)' % addr
+    aggregates['upstreams'] = [(label if up == addr else up, n)
+                               for up, n in aggregates['upstreams']]
+    for e in entries:
+        e['upstreams'] = [label if up == addr else up for up in e['upstreams']]
+
+
 @bp.route('/api/querylog')
 def querylog_get():
     settings = load_store('settings')
@@ -120,6 +134,7 @@ def querylog_get():
     raw = ctl.logs(2000 if ctl.mode == 'child' else 200) or ''
     lines = raw.splitlines()
     entries, aggregates = parse_query_log(lines)
+    _label_encdns(entries, aggregates)
     return jsonify({'success': True,
                     'enabled': bool(settings.get('log_queries')),
                     'mode': ctl.mode, 'window_lines': len(lines),

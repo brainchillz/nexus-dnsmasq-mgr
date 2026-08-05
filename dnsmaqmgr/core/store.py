@@ -48,10 +48,18 @@ DEFAULTS = {
     # Blocklist subscriptions: metadata only — the fetched domains live as
     # one-per-line files under BLOCKLISTS_DIR, keyed by list id.
     'blocklists': {'serial': 0, 'lists': []},
+    # Encrypted DNS upstream (opt-in): dnsmasq → supervised dnscrypt-proxy on
+    # loopback → encrypted hop. mode 'direct' (proxy → resolver, DoH/DNSCrypt)
+    # or 'relay' (proxy → anonymizing relay → resolver, DNSCrypt only).
+    # fallback_plain=False is fail-closed: the proxy is the ONLY upstream.
+    'encdns': {'serial': 0, 'enabled': False, 'mode': 'direct',
+               'providers': ['quad9'], 'custom_servers': [], 'relays': [],
+               'fallback_plain': False, 'listen_port': 5335},
     # Alert/webhook config (backed up) and its runtime state (not backed up).
     'alerts': {'enabled': False, 'webhook_url': '', 'format': 'generic',
                'events': {'new_device': True, 'pool_high': True,
-                          'service_down': True, 'cert_expiry': True},
+                          'service_down': True, 'cert_expiry': True,
+                          'encdns_down': True},
                'pool_threshold': 90, 'cert_days': 14},
     'alerts_state': {'baseline_done': False, 'known_macs': [],
                      'alerted_pools': [], 'counter_sum': None,

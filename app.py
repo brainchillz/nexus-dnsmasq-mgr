@@ -13,7 +13,7 @@ import sys
 
 from dnsmaqmgr import create_app, cli
 from dnsmaqmgr.core import config, auth, tls
-from dnsmaqmgr import dnsmasq, stats
+from dnsmaqmgr import dnsmasq, stats, encdns
 
 app = create_app()
 
@@ -24,6 +24,9 @@ if __name__ == '__main__':
         sys.exit(_rc)
     app.secret_key = auth.ensure_bootstrap()['secret_key']
     dnsmasq.ensure_render()
+    # Encrypted upstream first: if enabled, dnsmasq's rendered config already
+    # points at the proxy — it must be listening before dnsmasq answers.
+    encdns.startup()
     if config.SUPERVISE:
         ok, detail = dnsmasq.get_controller().start()
         if not ok:

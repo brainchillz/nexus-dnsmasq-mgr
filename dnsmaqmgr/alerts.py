@@ -34,12 +34,13 @@ from .core.validators import RE_LIST_URL
 bp = Blueprint('alerts', __name__)
 
 FORMATS = ('generic', 'ntfy', 'slack')
-EVENTS = ('new_device', 'pool_high', 'service_down', 'cert_expiry')
+EVENTS = ('new_device', 'pool_high', 'service_down', 'cert_expiry', 'encdns_down')
 SEND_TIMEOUT = 10
 RECENT_KEEP = 50
 
 # Re-alert interval per persistent condition (seconds).
-COOLDOWNS = {'service_down': 6 * 3600, 'cert_expiry': 24 * 3600}
+COOLDOWNS = {'service_down': 6 * 3600, 'cert_expiry': 24 * 3600,
+             'encdns_down': 6 * 3600}
 DEFAULT_COOLDOWN = 6 * 3600
 
 
@@ -137,6 +138,30 @@ def _check_service(state, settings):
     return found
 
 
+def _check_encdns():
+    """Encrypted upstream watchdog — the half that makes fail-closed livable:
+    when the proxy dies, resolution stops (by design) and this says why."""
+    from . import encdns
+    cfg = load_store('encdns')
+    if not cfg.get('enabled'):
+        return []
+    st = encdns.health()
+    port = st['port']
+    if not st['running']:
+        consequence = ('queries are falling back to PLAIN upstreams (fallback '
+                       'enabled) — traffic is visible to the ISP again'
+                       if cfg.get('fallback_plain') else
+                       'resolution is fail-closed — DNS queries are timing out')
+        return [('encdns_down', 'encdns_down', 'Encrypted DNS upstream is DOWN',
+                 'dnscrypt-proxy is not running; %s' % consequence)]
+    if st.get('healthy') is False:
+        return [('encdns_unhealthy', 'encdns_down',
+                 'Encrypted DNS upstream not answering',
+                 'dnscrypt-proxy is running but a test query via '
+                 '127.0.0.1#%d failed — the encrypted hop may be broken' % port)]
+    return []
+
+
 def _check_cert(cfg):
     info = cert_info()
     expires = info.get('expires')
@@ -177,6 +202,8 @@ def tick():
             candidates += _check_service(state, settings)
         if events_cfg.get('cert_expiry', True):
             candidates += _check_cert(cfg)
+        if events_cfg.get('encdns_down', True):
+            candidates += _check_encdns()
 
         now = int(time.time())
         last_sent = state.get('last_sent', {})

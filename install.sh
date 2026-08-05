@@ -27,7 +27,17 @@ echo ""
 
 info "Installing prerequisite packages..."
 apt-get update -qq
-apt-get install -y -qq dnsmasq python3 python3-venv openssl curl >/dev/null
+apt-get install -y -qq dnsmasq dnscrypt-proxy python3 python3-venv openssl curl >/dev/null
+
+# The distro dnscrypt-proxy ships a socket-activated instance on 127.0.2.1:53.
+# The app supervises its OWN dnscrypt-proxy child (loopback high port) for the
+# opt-in encrypted upstream, so the distro instance must not sit on the socket.
+if systemctl is-enabled --quiet dnscrypt-proxy.socket 2>/dev/null || \
+   systemctl is-active --quiet dnscrypt-proxy.socket 2>/dev/null; then
+    warn "Disabling the distro's socket-activated dnscrypt-proxy instance —"
+    warn "DNSMAQ-MGR runs its own supervised dnscrypt-proxy for the encrypted upstream."
+    systemctl disable --now dnscrypt-proxy.socket dnscrypt-proxy.service >/dev/null 2>&1 || true
+fi
 
 info "Creating service user..."
 if ! id -u $APP_USER &>/dev/null; then
@@ -47,7 +57,7 @@ fi
 $APP_DIR/venv/bin/pip install -q -r $APP_DIR/requirements.txt
 
 info "Preparing data directories..."
-mkdir -p $APP_DIR/state $APP_DIR/certs $APP_DIR/leases \
+mkdir -p $APP_DIR/state $APP_DIR/certs $APP_DIR/leases $APP_DIR/encdns \
          $APP_DIR/render/dnsmasq.d $APP_DIR/render/hosts.d
 chown -R $APP_USER:$APP_USER $APP_DIR
 # The interpreter, entrypoint and package that the sudoers rules run as ROOT
@@ -60,7 +70,7 @@ chown -R root:root $APP_DIR/venv $APP_DIR/app.py $APP_DIR/dnsmaqmgr \
 # read the rendered config and hosts trees.
 chmod 755 $APP_DIR $APP_DIR/render $APP_DIR/render/dnsmasq.d \
           $APP_DIR/render/hosts.d $APP_DIR/leases
-chmod 700 $APP_DIR/state $APP_DIR/certs
+chmod 700 $APP_DIR/state $APP_DIR/certs $APP_DIR/encdns
 
 info "Writing sudoers rules (argument-pinned)..."
 SYSTEMCTL="$(command -v systemctl)"

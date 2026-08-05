@@ -235,6 +235,7 @@ def _build_context(settings, dns):
         'forwards': [f for f in dns.get('forwards', []) if f.get('enabled', True)],
         'leases': parse_leases(),
         'blockindex': bl.load_block_index(),
+        'encdns': load_store('encdns'),
     }
 
 
@@ -302,6 +303,14 @@ def _attribute(ans, ctx):
                     'detail': 'forwarded upstream via server=/%s/%s'
                               % (fw['domain'], fw['upstream'])}
 
+    enc = ctx.get('encdns') or {}
+    if enc.get('enabled'):
+        detail = ('answered via the encrypted upstream (dnscrypt-proxy on '
+                  '127.0.0.1#%d)' % int(enc.get('listen_port') or 5335))
+        if enc.get('fallback_plain'):
+            detail += ', or a plain fallback upstream'
+        return {'kind': 'encrypted-upstream', 'managed': False, 'warn': False,
+                'detail': detail}
     return {'kind': 'upstream', 'managed': False, 'warn': False,
             'detail': 'answered by an upstream resolver (or cache): %s'
                       % ', '.join(settings.get('upstreams', []) or ['system default'])}

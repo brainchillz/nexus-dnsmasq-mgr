@@ -11,6 +11,7 @@ const LOOKUP_KIND_LABEL = {
   forward: ['Managed forward', 'green'],
   lease: ['DHCP lease', 'gray'],
   upstream: ['Upstream / cache', 'gray'],
+  'encrypted-upstream': ['Encrypted upstream', 'green'],
   'etc-hosts': ['/etc/hosts', 'yellow'],
   'foreign-conf': ['Foreign conf', 'yellow'],
 };

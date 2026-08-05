@@ -56,7 +56,9 @@ def _enabled(items):
 
 # ─── Render functions (pure: stores in, text out) ─────────────────────
 
-def render_main(settings):
+def render_main(settings, encdns=None):
+    enc = encdns or {}
+    enc_on = bool(enc.get('enabled'))
     lines = [HEADER]
     if not settings.get('dns_enabled', True):
         lines.append('# DNS disabled from the UI')
@@ -75,9 +77,24 @@ def render_main(settings):
         lines.append('listen-address=127.0.0.1')
     if settings.get('bind_interfaces'):
         lines.append('bind-interfaces')
-    for up in settings.get('upstreams', []):
-        lines.append('server=%s' % up)
-    if settings.get('no_resolv'):
+    if enc_on:
+        # Encrypted upstream: dnsmasq forwards to the supervised dnscrypt-proxy
+        # on loopback. Fail-closed by default — the proxy is the ONLY upstream,
+        # so a dead proxy stops resolution instead of silently leaking plaintext
+        # to the ISP. fallback_plain keeps the plain upstreams as explicit
+        # fallbacks, tried after the proxy (strict-order).
+        lines.append('# encrypted upstream (dnscrypt-proxy)')
+        lines.append('server=127.0.0.1#%d' % int(enc.get('listen_port') or 5335))
+        if enc.get('fallback_plain'):
+            for up in settings.get('upstreams', []):
+                lines.append('server=%s' % up)
+            lines.append('strict-order')
+    else:
+        for up in settings.get('upstreams', []):
+            lines.append('server=%s' % up)
+    if settings.get('no_resolv') or enc_on:
+        # Forced while encrypted: a /etc/resolv.conf nameserver would be a
+        # plaintext leak path around the proxy.
         lines.append('no-resolv')
     if settings.get('cache_size') is not None:
         # Emit even for 0 — `cache-size=0` disables caching, which is exactly
@@ -250,7 +267,7 @@ def render_blocklist(rec):
 
 def render_all(stores=None):
     """Render every managed file. Returns {relpath-under-RENDER_DIR: text}."""
-    store_names = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists')
+    store_names = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists', 'encdns')
     if stores is None:
         stores = {name: load_store(name) for name in store_names}
     else:
@@ -259,7 +276,7 @@ def render_all(stores=None):
             stores.setdefault(name, load_store(name))
     s, d, h, n = stores['settings'], stores['dns'], stores['dhcp'], stores['netboot']
     rendered = {
-        'dnsmasq.d/00-main.conf': render_main(s),
+        'dnsmasq.d/00-main.conf': render_main(s, stores['encdns']),
         'dnsmasq.d/10-dns.conf': render_dns(d, s),
         'dnsmasq.d/20-dhcp.conf': render_dhcp(h, s),
         'dnsmasq.d/30-boot.conf': render_boot(n, s),
@@ -394,8 +411,12 @@ class SystemdController:
 class ChildController:
     """Docker mode: the app IS the supervisor. dnsmasq runs as a child in the
     foreground; stderr is kept in a ring buffer for the logs UI; a monitor
-    thread respawns it with backoff if it dies unexpectedly."""
+    thread respawns it with backoff if it dies unexpectedly.
+
+    encdns.ProxyController subclasses this to supervise dnscrypt-proxy the
+    same way — `name` and `_args()` are the only child-specific pieces."""
     mode = 'child'
+    name = 'dnsmasq'
 
     def __init__(self):
         self._proc = None
@@ -406,12 +427,14 @@ class ChildController:
         self._stopping = False
         self._backoff = 1
 
-    def _spawn(self):
+    def _args(self):
         # -C /dev/null: never read the image's /etc/dnsmasq.conf — the rendered
         # conf-dir is the entire configuration.
-        args = [DNSMASQ_BIN, '--keep-in-foreground', '-C', '/dev/null',
+        return [DNSMASQ_BIN, '--keep-in-foreground', '-C', '/dev/null',
                 '--conf-dir=%s,*.conf' % CONF_DIR, '--log-facility=-']
-        self._proc = subprocess.Popen(args, stdout=subprocess.PIPE,
+
+    def _spawn(self):
+        self._proc = subprocess.Popen(self._args(), stdout=subprocess.PIPE,
                                       stderr=subprocess.STDOUT, text=True)
         threading.Thread(target=self._pump, args=(self._proc,), daemon=True).start()
         threading.Thread(target=self._watch, args=(self._proc,), daemon=True).start()
@@ -425,8 +448,8 @@ class ChildController:
         with self._lock:
             if self._stopping or proc is not self._proc:
                 return
-            self._log.append('dnsmasq exited rc=%s — respawning in %ds'
-                             % (proc.returncode, self._backoff))
+            self._log.append('%s exited rc=%s — respawning in %ds'
+                             % (self.name, proc.returncode, self._backoff))
         time.sleep(self._backoff)
         with self._lock:
             self._backoff = min(self._backoff * 2, 30)
@@ -512,7 +535,7 @@ def apply_change(mutate, sections=('settings',), from_mirror=False):
     On success returns a dict {action, changed, service_ok, ...} for the route
     to merge into its JSON response.
     """
-    store_names = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists')
+    store_names = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists', 'encdns')
     with STORE_LOCK:
         snapshot = {n: copy.deepcopy(load_store(n)) for n in store_names}
         mutate()
@@ -548,6 +571,15 @@ def apply_change(mutate, sections=('settings',), from_mirror=False):
         if not st.get('running'):
             service_ok, detail = False, detail or 'dnsmasq did not come back after %s' % action
 
+    # Every apply path (edit, rollback, restore, mirror push) may have changed
+    # the encdns store — re-sync the supervised proxy to match it. Idempotent
+    # and cheap when nothing changed.
+    try:
+        from . import encdns as encdns_mod
+        encdns_mod.sync_proxy()
+    except Exception as e:
+        print('encdns: proxy sync after apply failed: %s' % e, flush=True)
+
     if not from_mirror:
         from . import peers as peers_mod
         threading.Thread(target=peers_mod.push_all, args=(list(sections),), daemon=True).start()
@@ -566,6 +598,10 @@ def dnsmasq_status():
     st.update({'mode': ctl.mode, 'version': dnsmasq_version(),
                'dns_enabled': settings.get('dns_enabled', True),
                'dhcp_enabled': settings.get('dhcp_enabled', False)})
+    from . import encdns as encdns_mod
+    # No probe here — the Overview polls this; a real DNS query per poll is
+    # the Settings page's job.
+    st['encdns'] = encdns_mod.health(do_probe=False)
     return jsonify(st)
 
 

@@ -241,12 +241,19 @@ async function page_overview() {
       ${admin ? `<div class="toolbar" style="margin-top:8px"><button class="btn btn-sm btn-outline" onclick="overviewRestart()">Restart</button></div>` : ''}
     </div>`;
 
+  // Encrypted upstream is configured on the Settings page, not toggled here —
+  // enabling it needs a provider/mode choice; this row is a status readout.
+  const enc = st.encdns || {};
+  const encRow = enc.enabled
+    ? `<span class="status-badge ${enc.running ? 'green' : 'red'}">${enc.running ? 'active' : 'DOWN'}</span>`
+    : `<span class="status-badge gray">off</span>`;
   const togglesCard = `
     <div class="card">
       <div class="card-head">Features</div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:6px">
         <div style="display:flex;justify-content:space-between;align-items:center"><span>DNS server</span>${switchHtml(st.dns_enabled, "toggleFeature('dns_enabled', this.checked)", !admin)}</div>
         <div style="display:flex;justify-content:space-between;align-items:center"><span>DHCP server</span>${switchHtml(st.dhcp_enabled, "toggleFeature('dhcp_enabled', this.checked)", !admin)}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center${admin ? ';cursor:pointer" onclick="showPage(\'settings\')' : ''}" title="Encrypted DNS upstream (dnscrypt-proxy) — configured in Settings"><span>Encrypted DNS</span>${encRow}</div>
       </div>
     </div>`;
 

@@ -16,7 +16,7 @@ APP_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file
 STATIC_DIR = os.path.join(APP_DIR, 'static')
 TEMPLATES_DIR = os.path.join(APP_DIR, 'templates')
 
-APP_VERSION = '0.3.0'
+APP_VERSION = '0.4.0'
 
 DATA_DIR = os.environ.get('DNSMAQ_DATA_DIR', APP_DIR)
 STATE_DIR = os.path.join(DATA_DIR, 'state')
@@ -31,6 +31,13 @@ LEASES_FILE = os.path.join(LEASES_DIR, 'dnsmasq.leases')
 # Fetched blocklist domain files (one validated domain per line, keyed by
 # list id). App-private: only the rendered conf under RENDER_DIR is dnsmasq's.
 BLOCKLISTS_DIR = os.path.join(DATA_DIR, 'blocklists')
+
+# Encrypted DNS upstream (opt-in): the app supervises a dnscrypt-proxy child
+# listening on loopback; dnsmasq forwards to it. The rendered TOML and the
+# proxy's cached resolver/relay lists live here (app-private).
+ENCDNS_DIR = os.path.join(DATA_DIR, 'encdns')
+ENCDNS_CONF = os.path.join(ENCDNS_DIR, 'dnscrypt-proxy.toml')
+DNSCRYPT_BIN = os.environ.get('DNSMAQ_DNSCRYPT_BIN', 'dnscrypt-proxy')
 
 # The system hosts file dnsmasq reads by default (`no-hosts` disables that).
 # The lookup/audit tools parse it to attribute answers; overridable for tests.
@@ -131,11 +138,11 @@ def write_text_atomic(path, text, mode=0o644):
 def ensure_dirs():
     """Create the DATA_DIR tree on first boot (bare metal and Docker volume)."""
     for d in (STATE_DIR, CONF_DIR, HOSTS_DIR, LEASES_DIR, TLS_DIR, BLOCKLISTS_DIR,
-              CHANGELOG_DIR):
+              CHANGELOG_DIR, ENCDNS_DIR):
         os.makedirs(d, exist_ok=True)
     # State and certs are private to the app user; render/ must be readable by
     # dnsmasq (root).
-    for d in (STATE_DIR, TLS_DIR, BLOCKLISTS_DIR, CHANGELOG_DIR):
+    for d in (STATE_DIR, TLS_DIR, BLOCKLISTS_DIR, CHANGELOG_DIR, ENCDNS_DIR):
         try:
             os.chmod(d, 0o700)
         except OSError:
