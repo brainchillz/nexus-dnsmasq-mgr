@@ -1,9 +1,11 @@
-FROM debian:bookworm-slim
+# trixie, not bookworm: dnscrypt-proxy was dropped from Debian 12 and is back
+# in Debian 13 — and it must come from the distro (no fetched binaries).
+FROM debian:trixie-slim
 
 # dnsmasq comes from the distro (the image bundles it — the app supervises it
 # as a child process); Python needs are trivial, so debian-slim beats python:*.
 # dnscrypt-proxy backs the opt-in encrypted DNS upstream — also supervised by
-# the app, also from the distro (no fetched binaries).
+# the app.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         dnsmasq dnscrypt-proxy python3 python3-venv openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*

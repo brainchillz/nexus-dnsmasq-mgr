@@ -27,7 +27,15 @@ echo ""
 
 info "Installing prerequisite packages..."
 apt-get update -qq
-apt-get install -y -qq dnsmasq dnscrypt-proxy python3 python3-venv openssl curl >/dev/null
+apt-get install -y -qq dnsmasq python3 python3-venv openssl curl >/dev/null
+
+# dnscrypt-proxy backs the opt-in encrypted DNS upstream. Not every release
+# ships it (Debian 12 dropped it; Ubuntu and Debian 13 have it) and its
+# absence only disables that one feature — so warn, don't abort the install.
+if ! apt-get install -y -qq dnscrypt-proxy >/dev/null 2>&1; then
+    warn "dnscrypt-proxy is not available from this distro's repos —"
+    warn "the encrypted DNS upstream feature stays unavailable until it is installed."
+fi
 
 # The distro dnscrypt-proxy ships a socket-activated instance on 127.0.2.1:53.
 # The app supervises its OWN dnscrypt-proxy child (loopback high port) for the

@@ -515,6 +515,9 @@ complete mirroring testbed.
 - Boot files are hosted on your own external TFTP/HTTP server; entries just
   point clients at it (this app serves no files).
 - DHCPv6/RA management is not yet surfaced in the UI (use Extra Options).
+- The encrypted DNS upstream needs the distro `dnscrypt-proxy` package, which
+  Debian 12 does not ship (Ubuntu and Debian 13 do). Without it the feature
+  simply reports "not installed"; everything else works.
 - If other files in `/etc/dnsmasq.d/` set options this app also manages
   (`port=`, `dhcp-range`, `dhcp-leasefile`, `addn-hosts`), review them for
   conflicts — the installer warns about the ones it finds.
