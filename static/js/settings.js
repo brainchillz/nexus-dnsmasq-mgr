@@ -1,7 +1,21 @@
 // Settings page: global DNS/network, TLS certificate, users & tokens, service.
+// Appearance (the light/dark switch) is client-side and shown to every role;
+// the server-configuration sections below stay admin-only.
+function appearanceSection() {
+  const light = document.documentElement.classList.contains('theme-light');
+  return `
+    <h3 style="margin-top:24px">Appearance</h3>
+    <label class="checkitem" style="max-width:280px">
+      <input type="checkbox" ${light ? 'checked' : ''}
+             onchange="toggleTheme(); page_settings();"> Light theme
+    </label>
+    <p class="help">Stored in this browser only — each browser keeps its own choice.</p>`;
+}
+
 async function page_settings() {
   if (currentRole !== 'admin') {
-    $('page-content').innerHTML = '<h2>Settings</h2><div class="alert alert-warning">Administrator access required.</div>';
+    $('page-content').innerHTML = '<h2>Settings</h2>' + appearanceSection() +
+      '<div class="alert alert-warning" style="margin-top:16px">Server settings require administrator access.</div>';
     return;
   }
   const [s, tlsInfo, users, tokens, alerts, enc] = await Promise.all([
@@ -141,7 +155,8 @@ async function page_settings() {
         <button class="btn" onclick="backupDownload()">${icon('dl', 'ico-sm')} Download backup</button>
         <button class="btn btn-outline" onclick="restoreModal()">${icon('ul', 'ico-sm')} Restore from backup…</button>
       </div>
-    </div>`;
+    </div>
+    ${appearanceSection()}`;
 
   if (enc) encModeChanged();   // grey out providers the current mode can't use
 }

@@ -87,7 +87,7 @@ function applyThemeLabel() {
   const el = $('theme-label');
   if (el) el.textContent = light ? 'Dark theme' : 'Light theme';
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', light ? '#ffffff' : '#1c1e22');
+  if (meta) meta.setAttribute('content', light ? '#f9f7f3' : '#1b1c1e');
 }
 function toggleTheme(e) {
   if (e) e.preventDefault();
@@ -117,10 +117,11 @@ function fmtDur(sec) {
 }
 
 // Render a usage bar; colour shifts green -> yellow -> red as it fills.
+// Thin track with the percentage beside it (not overlaid) — see .usage in style.css.
 function usageBar(pct) {
   pct = Math.max(0, Math.min(100, Math.round(pct)));
   const cls = pct >= 90 ? 'red' : pct >= 70 ? 'yellow' : 'green';
-  return `<div class="usage-bar"><div class="usage-bar-fill ${cls}" style="width:${pct}%"></div><span class="usage-bar-label">${pct}%</span></div>`;
+  return `<div class="usage"><div class="usage-bar"><div class="usage-bar-fill ${cls}" style="width:${pct}%"></div></div><span class="usage-pct">${pct}%</span></div>`;
 }
 
 // Toggle switch (same markup/CSS as the Nexus Modules page).
