@@ -182,13 +182,24 @@ def push_to_peer(peer, sections):
     return status
 
 
-def push_all(sections):
-    """Push to every enabled peer. Called in a background thread after apply."""
+def push_all(sections, downstream_only=False):
+    """Push to every enabled peer. Called in a background thread after apply.
+
+    downstream_only limits the push to peers that can never push back
+    (kind 'unifi' — a gateway's local DNS records are a pure renderer).
+    Mirror-received applies use it: skipping peers entirely there (the old
+    behaviour) is what prevents A→B→A loops, but it also left UniFi peers
+    stale whenever this node's data arrives BY mirror — e.g. a secondary
+    mirroring hosts onward to a gateway, or an upstream IPAM feeding this
+    node. Loop-safe peers can and should still be brought up to date."""
     with _push_lock:
         cfg = load_store('peers')
         for peer in cfg.get('peers', []):
-            if peer.get('enabled', True):
-                push_to_peer(peer, sections)
+            if not peer.get('enabled', True):
+                continue
+            if downstream_only and peer.get('kind', 'dnsmaq') != 'unifi':
+                continue
+            push_to_peer(peer, sections)
 
 
 def _public(p):

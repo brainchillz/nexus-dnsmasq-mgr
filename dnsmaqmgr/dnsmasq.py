@@ -580,9 +580,11 @@ def apply_change(mutate, sections=('settings',), from_mirror=False):
     except Exception as e:
         print('encdns: proxy sync after apply failed: %s' % e, flush=True)
 
-    if not from_mirror:
-        from . import peers as peers_mod
-        threading.Thread(target=peers_mod.push_all, args=(list(sections),), daemon=True).start()
+    # Mirror-received applies push only to downstream-only peers (UniFi —
+    # cannot loop); everything else pushes to all peers as before.
+    from . import peers as peers_mod
+    threading.Thread(target=peers_mod.push_all,
+                     args=(list(sections), from_mirror), daemon=True).start()
 
     return {'action': action, 'changed': changed,
             'service_ok': service_ok, 'service_detail': detail}

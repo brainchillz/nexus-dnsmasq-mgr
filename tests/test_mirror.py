@@ -65,3 +65,52 @@ def test_status_reports_sources(client):
     assert st['accept'] is True
     assert 'hosts' in st['locked']
     assert st['sources']['primary1']['serial'] == 7
+
+
+def test_mirror_receive_pushes_downstream_only_peers(client, monkeypatch):
+    """A mirror-received apply must still update loop-safe downstream peers
+    (UniFi local DNS renders our hosts) while never re-pushing to dnsmaq
+    peers (that is the A->B->A loop guard)."""
+    from dnsmaqmgr import peers, dnsmasq as dm
+
+    calls = []
+    monkeypatch.setattr(peers, 'push_all',
+                        lambda sections, downstream_only=False:
+                        calls.append((tuple(sections), downstream_only)))
+
+    class SyncThread:            # run the push inline so the test can assert
+        def __init__(self, target, args=(), daemon=None):
+            self._t, self._a = target, args
+        def start(self):
+            self._t(*self._a)
+    monkeypatch.setattr(dm.threading, 'Thread', SyncThread)
+
+    headers = _arm_mirror(client)
+    r = client.post('/api/mirror/receive', json=_payload(), headers=headers)
+    assert r.status_code == 200
+    assert calls == [(('hosts',), True)]      # pushed, downstream-only
+
+    # ...and an ordinary local apply (hosts is mirror-locked now, so use an
+    # unlocked section) still pushes to everyone.
+    calls.clear()
+    r = client.post('/api/dns/addresses', json={'domain': 'ads.example', 'ip': '0.0.0.0'})
+    assert r.status_code == 200
+    assert calls and calls[0][1] is False
+
+
+def test_push_all_downstream_filter(monkeypatch):
+    from dnsmaqmgr import peers
+    from dnsmaqmgr.core.store import load_store, save_store
+    cfg = load_store('peers')
+    cfg['peers'] = [{'name': 'mirror2', 'kind': 'dnsmaq', 'enabled': True},
+                    {'name': 'gw', 'kind': 'unifi', 'enabled': True},
+                    {'name': 'gw-off', 'kind': 'unifi', 'enabled': False}]
+    save_store('peers', cfg)
+    pushed = []
+    monkeypatch.setattr(peers, 'push_to_peer',
+                        lambda peer, sections: pushed.append(peer['name']))
+    peers.push_all(['hosts'], downstream_only=True)
+    assert pushed == ['gw']
+    pushed.clear()
+    peers.push_all(['hosts'])
+    assert pushed == ['mirror2', 'gw']
