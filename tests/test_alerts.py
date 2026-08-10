@@ -1,5 +1,6 @@
 """Alerts: config validation, condition checks, delivery formats, cooldowns."""
 import json
+from datetime import datetime, timedelta
 
 from dnsmaqmgr import alerts
 from dnsmaqmgr.core.config import LEASES_FILE
@@ -86,8 +87,11 @@ def test_service_restart_detection(monkeypatch):
 
 
 def test_cert_expiry_check(monkeypatch):
+    # Relative to now: the literal date this used to pin ('Aug 10 2026')
+    # arrived, turning the second assertion into a permanent failure.
+    expires = (datetime.now() + timedelta(days=7)).strftime('%b %d %H:%M:%S %Y GMT')
     monkeypatch.setattr(alerts, 'cert_info',
-                        lambda: {'present': True, 'expires': 'Aug 10 12:00:00 2026 GMT'})
+                        lambda: {'present': True, 'expires': expires})
     found = alerts._check_cert({'cert_days': 14})
     assert len(found) == 1 and found[0][1] == 'cert_expiry'
     assert alerts._check_cert({'cert_days': 2}) == []
