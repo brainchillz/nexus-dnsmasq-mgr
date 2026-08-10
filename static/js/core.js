@@ -316,10 +316,14 @@ async function page_overview() {
     <h2>Overview</h2>
     ${secondaryBanner}
     ${st.running ? '' : '<div class="alert alert-warning"><strong>dnsmasq is not running.</strong> Check the Config page for validation errors, or restart it.</div>'}
+    <div id="overview-audit"></div>
     <div class="cards">${statusCard}${togglesCard}${dnsCard}${leaseCard}${peerCard}</div>
     ${pools}`;
 
   fillOverviewSparks();
+  // Shadowing is silent by nature — surface it on the landing page, not only
+  // on Lookup/DNS Overrides where you have to already suspect a problem.
+  renderAuditBanner('overview-audit');
 }
 
 async function fillOverviewSparks() {

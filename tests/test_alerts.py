@@ -93,6 +93,27 @@ def test_cert_expiry_check(monkeypatch):
     assert alerts._check_cert({'cert_days': 2}) == []
 
 
+def test_shadowing_check(client, monkeypatch, tmp_path):
+    from dnsmaqmgr import lookup
+    etc = tmp_path / 'hosts'
+    etc.write_text('127.0.0.1 localhost\n')
+    monkeypatch.setattr(lookup, 'ETC_HOSTS', str(etc))
+    assert alerts._check_shadowing() == []       # a clean hosts file is quiet
+
+    etc.write_text('127.0.0.1 localhost\n127.0.1.1 box.example.net box\n')
+    found = alerts._check_shadowing()
+    assert len(found) == 1 and found[0][1] == 'shadowed_record'
+    key, _, _, msg = found[0]
+    assert key.startswith('shadowed:') and 'box.example.net' in msg
+    assert alerts._cooldown(key) == 24 * 3600    # prefix rule, not the default
+
+    # Same conflict set -> same key (cooldown holds); a new one -> new key.
+    assert alerts._check_shadowing()[0][0] == key
+    etc.write_text('127.0.0.1 localhost\n127.0.1.1 box.example.net box\n'
+                   '127.0.0.2 other.example.net\n')
+    assert alerts._check_shadowing()[0][0] != key
+
+
 class _FakeResponse:
     status = 200
     def __enter__(self):

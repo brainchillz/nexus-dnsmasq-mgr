@@ -150,6 +150,45 @@ def scan_hosts_file(names, path=None):
     return hits
 
 
+# Hosts-file names that legitimately resolve to loopback. Anything else on
+# 127.0.0.0/8 or ::1 is a name the LAN will be told to find on itself.
+LOOPBACK_OK = {'localhost', 'localhost.localdomain',
+               'ip6-localhost', 'ip6-loopback'}
+
+
+def _is_loopback(ip):
+    return ip.startswith('127.') or ip.strip() == '::1'
+
+
+def scan_hosts_loopback(path=None):
+    """Hosts-file lines mapping a real hostname to loopback. dnsmasq serves
+    these to every client on the LAN, where 127.x means "you" — so the answer
+    is wrong no matter what, whether or not a managed record also exists.
+
+    This is the blind spot in the managed-name audit below: that one only
+    fires when a name is ALSO a managed record with a different IP, so a
+    hostname that was never imported would be silently mis-served. The usual
+    source is the Debian/Ubuntu `127.0.1.1 <fqdn> <host>` line, which in
+    Docker arrives via the host's /etc/hosts under host networking.
+    """
+    path = path or ETC_HOSTS
+    hits = []
+    try:
+        with open(path) as f:
+            for lineno, raw in enumerate(f, 1):
+                parts = raw.split('#', 1)[0].split()
+                if len(parts) < 2 or not _is_loopback(parts[0]):
+                    continue
+                bad = [t for t in parts[1:]
+                       if t.lower().rstrip('.') not in LOOPBACK_OK]
+                if bad:
+                    hits.append({'file': path, 'line': lineno,
+                                 'ip': parts[0], 'names': bad})
+    except OSError:
+        pass
+    return hits
+
+
 def _covers(domain, name):
     """address=/server= semantics: the domain itself or any subdomain."""
     return name == domain or name.endswith('.' + domain)
@@ -364,12 +403,17 @@ def lookup():
                     'no_hosts': bool(settings.get('no_hosts'))})
 
 
-@bp.route('/api/lookup/audit')
-def lookup_audit():
-    """Scan every managed host name for shadowing definitions in /etc/hosts
-    and foreign dnsmasq config. Drives the warning banners in the UI."""
-    settings = load_store('settings')
-    dns = load_store('dns')
+def audit_conflicts(settings=None, dns=None):
+    """Sources dnsmasq is serving that this app does not manage: /etc/hosts
+    lines (shadowing a managed name, or pointing any real name at loopback)
+    and foreign dnsmasq config. Returns (conflicts, names_checked).
+
+    Shared by the /api/lookup/audit route, which drives the UI banners, and
+    by the alerts tick — a passive banner only helps someone already looking
+    at the Lookup or DNS page.
+    """
+    settings = load_store('settings') if settings is None else settings
+    dns = load_store('dns') if dns is None else dns
     by_name = {}
     for h in dns.get('hosts', []):
         if not h.get('enabled', True):
@@ -377,21 +421,41 @@ def lookup_audit():
         for n in _expand_names(h['name'], settings):
             by_name.setdefault(n, h)
 
-    conflicts = []
-    if by_name and not settings.get('no_hosts'):
-        for hit in scan_hosts_file(set(by_name)):
-            for matched in hit['names']:
-                rec = by_name.get(matched.lower().rstrip('.'))
-                if rec and hit['ip'] not in (rec.get('a'), rec.get('aaaa')):
-                    conflicts.append({'kind': 'etc-hosts', 'name': matched,
-                                      'file': hit['file'], 'line': hit['line'],
-                                      'ip': hit['ip'],
-                                      'expected': rec.get('a') or rec.get('aaaa')})
+    conflicts, seen_lines = [], set()
+    if not settings.get('no_hosts'):
+        if by_name:
+            for hit in scan_hosts_file(set(by_name)):
+                for matched in hit['names']:
+                    rec = by_name.get(matched.lower().rstrip('.'))
+                    if rec and hit['ip'] not in (rec.get('a'), rec.get('aaaa')):
+                        seen_lines.add((hit['file'], hit['line']))
+                        conflicts.append({'kind': 'etc-hosts', 'name': matched,
+                                          'file': hit['file'], 'line': hit['line'],
+                                          'ip': hit['ip'],
+                                          'expected': rec.get('a') or rec.get('aaaa')})
+        # Independent of the managed-name scan above: a loopback answer for a
+        # real name is broken even when nothing managed collides with it.
+        for hit in scan_hosts_loopback():
+            if (hit['file'], hit['line']) in seen_lines:
+                continue          # already reported, with better detail
+            conflicts.append({'kind': 'etc-hosts-loopback',
+                              'name': ', '.join(hit['names']),
+                              'file': hit['file'], 'line': hit['line'],
+                              'ip': hit['ip'], 'expected': ''})
     if by_name:
         for hit in scan_foreign_conf(set(by_name)):
             conflicts.append({'kind': 'foreign-conf', 'name': '',
                               'file': hit['file'], 'line': hit['line'],
                               'ip': hit['ip'], 'text': hit['text'], 'expected': ''})
+    return conflicts, len(by_name)
+
+
+@bp.route('/api/lookup/audit')
+def lookup_audit():
+    """Scan for shadowing definitions in /etc/hosts and foreign dnsmasq
+    config. Drives the warning banners in the UI."""
+    settings = load_store('settings')
+    conflicts, checked = audit_conflicts(settings)
     return jsonify({'success': True, 'conflicts': conflicts,
                     'no_hosts': bool(settings.get('no_hosts')),
-                    'checked': len(by_name)})
+                    'checked': checked})

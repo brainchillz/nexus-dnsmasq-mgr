@@ -117,6 +117,41 @@ def test_audit_respects_no_hosts_and_scans_foreign_conf(client, monkeypatch, tmp
     assert {c['kind'] for c in r.json['conflicts']} == {'foreign-conf'}
 
 
+def test_audit_flags_loopback_for_unmanaged_name(client, monkeypatch, tmp_path):
+    """The Debian `127.0.1.1 <fqdn>` line is wrong for LAN clients even when
+    the name was never imported as a managed record — the managed-name scan
+    alone would miss it entirely."""
+    etc = tmp_path / 'hosts'
+    etc.write_text('127.0.0.1 localhost\n'
+                   '127.0.1.1 silo.example.net silo\n'
+                   '::1 ip6-localhost ip6-loopback\n')
+    monkeypatch.setattr(lookup, 'ETC_HOSTS', str(etc))
+    confs = client.get('/api/lookup/audit').json['conflicts']
+    assert len(confs) == 1                      # localhost/ip6 lines are fine
+    assert confs[0]['kind'] == 'etc-hosts-loopback' and confs[0]['line'] == 2
+    assert confs[0]['ip'] == '127.0.1.1'
+    assert 'silo.example.net' in confs[0]['name']
+
+    # no-hosts silences it: dnsmasq no longer reads the file at all
+    client.post('/api/settings', json={'no_hosts': True})
+    assert client.get('/api/lookup/audit').json['conflicts'] == []
+
+
+def test_audit_loopback_not_double_reported(client, monkeypatch, tmp_path):
+    """A loopback line that ALSO shadows a managed record is reported once,
+    as the more specific managed conflict."""
+    client.post('/api/dns/hosts', json={'name': 'silo.lan', 'a': '10.0.0.9'})
+    etc = tmp_path / 'hosts'
+    etc.write_text('127.0.1.1 silo.lan silo\n')
+    monkeypatch.setattr(lookup, 'ETC_HOSTS', str(etc))
+    confs = client.get('/api/lookup/audit').json['conflicts']
+    # Both names on the line are shadowed and both are reported, but none of
+    # them a second time as a loopback finding.
+    assert {c['kind'] for c in confs} == {'etc-hosts'}
+    assert {c['name'] for c in confs} == {'silo.lan', 'silo'}
+    assert all(c['expected'] == '10.0.0.9' for c in confs)
+
+
 def test_no_hosts_renders(client):
     client.post('/api/settings', json={'no_hosts': True})
     cfg = client.get('/api/dnsmasq/config').json['files']

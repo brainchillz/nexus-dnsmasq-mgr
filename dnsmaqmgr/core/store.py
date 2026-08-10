@@ -10,7 +10,7 @@ import copy
 import secrets
 import threading
 
-from .config import STATE_DIR, write_json_atomic
+from .config import STATE_DIR, SUPERVISE, write_json_atomic
 
 STORE_LOCK = threading.RLock()
 
@@ -33,7 +33,14 @@ DEFAULTS = {
         'dhcp_authoritative': True,
         'log_queries': False,
         'log_dhcp': False,
-        'no_hosts': False,
+        # In Docker the container's /etc/hosts is Docker's own synthetic copy
+        # (under host networking, the HOST's file — including the Debian
+        # `127.0.1.1 <fqdn>` line), never something the operator curates.
+        # Serving it hands LAN clients loopback answers for real names, so
+        # default to ignoring it there. Bare metal keeps the dnsmasq default:
+        # a hand-maintained /etc/hosts is a legitimate source on a box the
+        # operator owns.
+        'no_hosts': SUPERVISE,
         'extra_options': '',
         'mirror_accept': False,
         'mirror_token_hash': None,

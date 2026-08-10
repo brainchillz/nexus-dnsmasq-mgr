@@ -126,6 +126,7 @@ async function page_settings() {
       ${flag('al-ev-svc', 'dnsmasq down or restarted', alerts.events.service_down)}
       ${flag('al-ev-cert', 'Web TLS certificate nearing expiry', alerts.events.cert_expiry)}
       ${flag('al-ev-enc', 'Encrypted DNS upstream down or not answering', alerts.events.encdns_down !== false)}
+      ${flag('al-ev-shadow', 'DNS records served from outside this app (/etc/hosts, foreign dnsmasq.d)', alerts.events.shadowed_record !== false)}
       <div class="form-group" style="max-width:220px"><label>Pool threshold (%)</label>
         <input id="al-pool" class="form-control" type="number" min="50" max="100" value="${alerts.pool_threshold}"></div>
       <div class="form-group" style="max-width:220px"><label>Cert warning window (days)</label>
@@ -261,6 +262,7 @@ async function alertsSave() {
       service_down: $('al-ev-svc').checked,
       cert_expiry: $('al-ev-cert').checked,
       encdns_down: $('al-ev-enc').checked,
+      shadowed_record: $('al-ev-shadow').checked,
     },
     pool_threshold: parseInt($('al-pool').value) || 90,
     cert_days: parseInt($('al-cert').value) || 14,

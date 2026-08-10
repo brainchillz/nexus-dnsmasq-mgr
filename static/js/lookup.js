@@ -81,11 +81,16 @@ async function renderAuditBanner(elId) {
   let a;
   try { a = await API.get('/api/lookup/audit'); } catch (e) { return; }
   if (!a.conflicts || !a.conflicts.length) { el.innerHTML = ''; return; }
-  const items = a.conflicts.slice(0, 6).map(c => c.kind === 'etc-hosts'
-    ? `<li><code>${escapeHtml(c.name)}</code> is also defined in <code>${escapeHtml(c.file)}</code> line ${c.line}
-        as <code>${escapeHtml(c.ip)}</code> (managed record says <code>${escapeHtml(c.expected)}</code>)</li>`
-    : `<li><code>${escapeHtml(c.file)}</code> line ${c.line}: <code>${escapeHtml(c.text || '')}</code></li>`
-  ).join('');
+  const items = a.conflicts.slice(0, 6).map(c => {
+    if (c.kind === 'etc-hosts')
+      return `<li><code>${escapeHtml(c.name)}</code> is also defined in <code>${escapeHtml(c.file)}</code> line ${c.line}
+        as <code>${escapeHtml(c.ip)}</code> (managed record says <code>${escapeHtml(c.expected)}</code>)</li>`;
+    if (c.kind === 'etc-hosts-loopback')
+      return `<li><code>${escapeHtml(c.name)}</code> resolves to <code>${escapeHtml(c.ip)}</code>
+        via <code>${escapeHtml(c.file)}</code> line ${c.line} — clients are being sent to
+        <em>themselves</em> for this name</li>`;
+    return `<li><code>${escapeHtml(c.file)}</code> line ${c.line}: <code>${escapeHtml(c.text || '')}</code></li>`;
+  }).join('');
   el.innerHTML = `<div class="alert alert-warning">${icon('warn', 'ico-sm')}
     <strong>${a.conflicts.length} name(s) are shadowed by config outside this app.</strong>
     dnsmasq may answer with values the UI does not show.

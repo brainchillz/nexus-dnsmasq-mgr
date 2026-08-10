@@ -7,6 +7,8 @@ Watched conditions:
   * service_down — dnsmasq is not running, or its cumulative counters went
                    backwards (the daemon restarted/respawned)
   * cert_expiry  — the web UI TLS certificate is inside the warning window
+  * shadowed_record — dnsmasq is serving DNS records this app does not manage
+                   (stray /etc/hosts lines, foreign dnsmasq.d fragments)
 
 Delivery is one webhook URL in one of three payload shapes: 'generic' (plain
 JSON), 'ntfy' (text body + Title/Tags headers) or 'slack'
@@ -21,6 +23,7 @@ Config lives in the 'alerts' store (included in backups); runtime state
 import json
 import time
 import socket
+import hashlib
 import urllib.request
 from datetime import datetime
 from flask import Blueprint, jsonify
@@ -34,13 +37,17 @@ from .core.validators import RE_LIST_URL
 bp = Blueprint('alerts', __name__)
 
 FORMATS = ('generic', 'ntfy', 'slack')
-EVENTS = ('new_device', 'pool_high', 'service_down', 'cert_expiry', 'encdns_down')
+EVENTS = ('new_device', 'pool_high', 'service_down', 'cert_expiry',
+          'encdns_down', 'shadowed_record')
 SEND_TIMEOUT = 10
 RECENT_KEEP = 50
 
 # Re-alert interval per persistent condition (seconds).
 COOLDOWNS = {'service_down': 6 * 3600, 'cert_expiry': 24 * 3600,
              'encdns_down': 6 * 3600}
+# Shadowing is a config mistake, not an outage — nag daily, not hourly. Keyed
+# by digest prefix, so this matches every 'shadowed:<digest>' key.
+COOLDOWN_PREFIXES = {'shadowed:': 24 * 3600}
 DEFAULT_COOLDOWN = 6 * 3600
 
 
@@ -162,6 +169,41 @@ def _check_encdns():
     return []
 
 
+def _check_shadowing():
+    """Records dnsmasq serves that this app does not manage — stray /etc/hosts
+    lines and foreign dnsmasq.d fragments.
+
+    The audit itself is older than this check; it just had nowhere to speak
+    from except two pages nobody had open. The key is a digest of the conflict
+    set, so a steady condition re-alerts once per cooldown while a NEW
+    conflict notifies immediately instead of hiding behind it.
+    """
+    from .lookup import audit_conflicts
+    conflicts, _ = audit_conflicts()
+    if not conflicts:
+        return []
+    # Collapse per-name conflicts to the config LINE that causes them — one
+    # `127.0.1.1 host.dom host` line shadows two names but is one thing to go
+    # fix, and repeating it would skew both the digest and the message.
+    lines = {}
+    for c in conflicts:
+        lines.setdefault((c['file'], c['line'], c['ip']), []).append(c.get('name') or '')
+    ident = sorted('%s:%s:%s' % k for k in lines)
+    key = 'shadowed:%s' % hashlib.sha1('|'.join(ident).encode()).hexdigest()[:12]
+    shown = []
+    for (path, line, ip), names in sorted(lines.items())[:5]:
+        named = ', '.join(n for n in names if n)
+        shown.append('%s line %s → %s%s' % (path, line, ip,
+                                            (' (%s)' % named) if named else ''))
+    if len(lines) > 5:
+        shown.append('…and %d more' % (len(lines) - 5))
+    return [(key, 'shadowed_record', 'DNS records served from outside this app',
+             'dnsmasq is answering from %d config line(s) the UI does not '
+             'manage: %s. Diagnose on the Lookup page; "Ignore the system '
+             '/etc/hosts" in Settings turns off the /etc/hosts source.'
+             % (len(lines), '; '.join(shown)))]
+
+
 def _check_cert(cfg):
     info = cert_info()
     expires = info.get('expires')
@@ -177,6 +219,17 @@ def _check_cert(cfg):
                  'The web UI TLS certificate expires in %d day(s) (%s)'
                  % (max(days, 0), expires))]
     return []
+
+
+def _cooldown(key):
+    """Per-key re-alert interval. Exact match first, then prefix rules for
+    keys carrying a variable suffix (digests, MACs, pool tags)."""
+    if key in COOLDOWNS:
+        return COOLDOWNS[key]
+    for prefix, secs in COOLDOWN_PREFIXES.items():
+        if key.startswith(prefix):
+            return secs
+    return DEFAULT_COOLDOWN
 
 
 def tick():
@@ -204,11 +257,13 @@ def tick():
             candidates += _check_cert(cfg)
         if events_cfg.get('encdns_down', True):
             candidates += _check_encdns()
+        if events_cfg.get('shadowed_record', True):
+            candidates += _check_shadowing()
 
         now = int(time.time())
         last_sent = state.get('last_sent', {})
         due = [(k, ev, t, m) for (k, ev, t, m) in candidates
-               if now - int(last_sent.get(k, 0)) >= COOLDOWNS.get(k, DEFAULT_COOLDOWN)]
+               if now - int(last_sent.get(k, 0)) >= _cooldown(k)]
         save_store('alerts_state', state)   # baseline/hysteresis even if nothing due
 
     for key, event, title, message in due:
