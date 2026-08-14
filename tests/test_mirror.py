@@ -58,6 +58,41 @@ def test_receive_revalidates_records(client):
     assert r.status_code == 422
 
 
+def test_receive_refuses_duplicate_static_lease_macs_and_ips(client):
+    """dnsmasq refuses to start on a duplicate dhcp-host MAC or IP and --test
+    does not catch it. The UI routes already guard this; the mirror path (which
+    a peer's re-push also travels) must not be the one way to deliver a store
+    that kills dnsmasq at its next restart."""
+    headers = _arm_mirror(client)
+
+    def dhcp_payload(leases, serial=1):
+        return {'source': 'primary1', 'serial': serial, 'sections': ['dhcp'],
+                'data': {'dhcp': {'ranges': [], 'options': [],
+                                  'static_leases': leases}}}
+
+    dup_mac = [{'mac': 'aa:bb:cc:00:00:01', 'ip': '10.0.0.10', 'hostname': 'a'},
+               {'mac': 'aa:bb:cc:00:00:01', 'ip': '10.0.0.11', 'hostname': 'b'}]
+    r = client.post('/api/mirror/receive', json=dhcp_payload(dup_mac), headers=headers)
+    assert r.status_code == 422 and 'duplicate MAC' in r.json['error']
+
+    dup_ip = [{'mac': 'aa:bb:cc:00:00:01', 'ip': '10.0.0.10', 'hostname': 'a'},
+              {'mac': 'aa:bb:cc:00:00:02', 'ip': '10.0.0.10', 'hostname': 'b'}]
+    r = client.post('/api/mirror/receive', json=dhcp_payload(dup_ip), headers=headers)
+    assert r.status_code == 422 and 'duplicate IP' in r.json['error']
+
+    # A refused push must not have advanced the serial or touched the store.
+    assert client.get('/api/dhcp').json.get('static_leases', []) == []
+
+    # Repeated hostnames are the UI's courtesy check, not a restart-killer —
+    # a mirror source may legitimately push two scopes whose FQDNs share a
+    # first label.
+    ok = [{'mac': 'aa:bb:cc:00:00:01', 'ip': '10.0.0.10', 'hostname': 'web'},
+          {'mac': 'aa:bb:cc:00:00:02', 'ip': '10.0.0.11', 'hostname': 'web'}]
+    r = client.post('/api/mirror/receive', json=dhcp_payload(ok), headers=headers)
+    assert r.status_code == 200, r.json
+    assert len(client.get('/api/dhcp').json['static_leases']) == 2
+
+
 def test_status_reports_sources(client):
     headers = _arm_mirror(client)
     client.post('/api/mirror/receive', json=_payload(serial=7), headers=headers)

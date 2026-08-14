@@ -185,6 +185,22 @@ def mirror_receive():
                     rec['id'] = _keep_id(raw, prefix)
                     recs.append(rec)
                 block[coll] = recs
+            # dnsmasq refuses to start on a duplicate dhcp-host MAC or IP, and
+            # --test does not catch it. The interactive routes run _dup_check;
+            # this path (which a peer's own re-push also travels) must not be
+            # the one that can deliver a store dnsmasq dies on at its next
+            # restart. Only the fatal pair is enforced — a repeated hostname
+            # is the UI's courtesy check, not a restart-killer.
+            seen_mac, seen_ip = set(), set()
+            for rec in block['static_leases']:
+                if rec['mac'] in seen_mac:
+                    return err('static_leases: duplicate MAC %s — dnsmasq would '
+                               'refuse to start' % rec['mac'], 422)
+                if rec['ip'] in seen_ip:
+                    return err('static_leases: duplicate IP %s — dnsmasq would '
+                               'refuse to start' % rec['ip'], 422)
+                seen_mac.add(rec['mac'])
+                seen_ip.add(rec['ip'])
             staged['dhcp'] = block
         if 'netboot' in sections:
             d = data.get('netboot') or {}
