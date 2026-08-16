@@ -23,7 +23,8 @@ vectors in tests/test_ed25519.py — including the negative cases, which is what
 actually catches a broken verifier (a verifier that returns True for
 everything passes every positive vector).
 
-Python 3.9 through 3.14 clean (ustoreit runs 3.9, otn-ext runs 3.14).
+Python 3.9 through 3.14 clean — the oldest and newest interpreters this has
+to run on.
 """
 import hashlib
 
