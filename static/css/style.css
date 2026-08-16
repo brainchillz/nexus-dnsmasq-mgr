@@ -514,3 +514,14 @@ textarea.form-control {
 .page-header h2, .page-header h3 { margin: 0; }
 .page-header h3::after { display: none; }
 .btn-success { background: var(--green); color: #fff; }
+
+/* ─── Single sign-on (only rendered where this node is enrolled) ─────── */
+.sso-block { margin-top: 14px; }
+.sso-sep { display: flex; align-items: center; gap: 10px;
+  color: var(--text-muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.08em; margin-bottom: 12px; }
+.sso-sep::before, .sso-sep::after { content: ''; flex: 1;
+  border-top: 1px solid var(--border); }
+.btn.sso-btn { width: 100%; background: transparent; color: var(--text);
+  border: 1px solid var(--border); }
+.btn.sso-btn:hover { border-color: var(--primary); color: var(--primary); }
