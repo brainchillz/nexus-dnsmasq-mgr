@@ -323,3 +323,38 @@ def test_restore_enabled_without_binary_rejected(client, monkeypatch):
     r = client.post('/api/backup/restore', json={'backup': backup})
     assert r.status_code == 422 and 'dnscrypt-proxy is not installed' in r.json['error']
     assert not load_store('encdns')['enabled']
+
+
+def test_provider_swap_flushes_dnsmasq_cache(client, monkeypatch):
+    """Swapping providers on the same port leaves dnsmasq's render identical,
+    so nothing would touch dnsmasq — but its cache still holds the OLD
+    provider's answers (a filtering provider's 0.0.0.0 sinkholes). The save
+    must SIGHUP dnsmasq to drop them."""
+    from dnsmaqmgr import dnsmasq as dm
+    fake = _stub_proxy(monkeypatch)
+    r = client.post('/api/encdns', json={'enabled': True, 'providers': ['adguard']})
+    assert r.json['success'] and r.json['action'] == 'restart'
+
+    calls = []
+    monkeypatch.setattr(dm._controller, 'reload', lambda: (calls.append(1), (True, ''))[1])
+    r = client.post('/api/encdns', json={'enabled': True, 'providers': ['cloudflare']})
+    assert r.json['success']
+    assert r.json['action'] == 'reload' and r.json['service_ok']
+    assert calls == [1]                            # dnsmasq cache dropped
+    assert fake.restarts == 1                      # proxy picked up the new provider
+
+    # A failed flush is reported, not swallowed.
+    monkeypatch.setattr(dm._controller, 'reload', lambda: (False, 'boom'))
+    r = client.post('/api/encdns', json={'enabled': True, 'providers': ['quad9']})
+    assert r.json['success'] and r.json['action'] == 'reload'
+    assert not r.json['service_ok'] and 'boom' in r.json['service_detail']
+
+
+def test_flush_endpoint(client, monkeypatch):
+    from dnsmaqmgr import dnsmasq as dm
+    calls = []
+    monkeypatch.setattr(dm._controller, 'reload', lambda: (calls.append(1), (True, ''))[1])
+    assert client.post('/api/dnsmasq/flush').json['success'] and calls == [1]
+    monkeypatch.setattr(dm._controller, 'reload', lambda: (False, 'no pid'))
+    r = client.post('/api/dnsmasq/flush')
+    assert r.status_code == 500 and 'no pid' in r.json['error']

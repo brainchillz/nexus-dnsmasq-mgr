@@ -386,5 +386,15 @@ def encdns_save():
     if isinstance(res, tuple):
         sync_proxy()   # store was rolled back — put the proxy back too
         return res
+    if res.get('action') == 'none' and cfg.get('enabled'):
+        # Only the proxy changed (provider/mode/relay swap on the same port):
+        # dnsmasq's render is byte-identical, so apply_change left it alone —
+        # but its cache still holds the OLD resolver's answers (a filtering
+        # provider's 0.0.0.0 sinkholes) for their full TTL. SIGHUP drops the
+        # cache without a restart.
+        from .dnsmasq import get_controller
+        ok, detail = get_controller().reload()
+        res.update({'action': 'reload', 'service_ok': ok and res.get('service_ok', True),
+                    'service_detail': detail or res.get('service_detail', '')})
     return jsonify({'success': True, **_public(load_store('encdns')),
                     'status': health(do_probe=False), **res})

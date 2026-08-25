@@ -651,6 +651,17 @@ def dnsmasq_restart():
     return jsonify({'success': True})
 
 
+@bp.route('/api/dnsmasq/flush', methods=['POST'])
+def dnsmasq_flush():
+    """Drop dnsmasq's resolver cache without a restart (SIGHUP). Useful after
+    an upstream/filtering change elsewhere left stale (e.g. sinkholed)
+    answers cached for their full TTL."""
+    service_ok, detail = get_controller().reload()
+    if not service_ok:
+        return err('Cache flush failed: %s' % detail, 500)
+    return jsonify({'success': True})
+
+
 @bp.route('/api/dnsmasq/logs')
 def dnsmasq_logs():
     return jsonify({'logs': get_controller().logs()})

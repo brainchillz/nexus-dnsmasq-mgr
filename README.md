@@ -409,6 +409,7 @@ static_leases `{mac, ip, hostname?, tag?}` · options `{option, value, tag?}`
 | POST | `/api/dnsmasq/validate` | re-render + `dnsmasq --test`, no swap |
 | POST | `/api/dnsmasq/apply` | force full re-render + restart |
 | POST | `/api/dnsmasq/restart` | restart dnsmasq |
+| POST | `/api/dnsmasq/flush` | drop the resolver cache (SIGHUP), no restart |
 | GET | `/api/dnsmasq/logs` | service log tail |
 
 ### Encrypted DNS upstream

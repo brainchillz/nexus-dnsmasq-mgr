@@ -215,6 +215,14 @@ async function overviewRestart() {
   page_overview();
 }
 
+async function overviewFlush(btn) {
+  // SIGHUP: drops the resolver cache, no restart, no DHCP interruption.
+  try {
+    await API.post('/api/dnsmasq/flush', {});
+    if (btn) { btn.textContent = 'Flushed ✓'; setTimeout(() => { btn.textContent = 'Flush cache'; }, 2500); }
+  } catch (e) { alert(e.message); }
+}
+
 async function page_overview() {
   const [st, cur, peers] = await Promise.all([
     API.get('/api/dnsmasq/status'),
@@ -239,7 +247,7 @@ async function page_overview() {
       <div class="card-head"><span class="status-dot ${st.running ? 'green' : 'red'}"></span>dnsmasq</div>
       <div class="card-value" style="font-size:1.4em">${st.running ? 'running' : 'stopped'}</div>
       <div class="card-sub">${st.version ? 'v' + escapeHtml(st.version) + ' · ' : ''}${escapeHtml(st.mode)} mode${st.pid ? ' · pid ' + st.pid : ''}</div>
-      ${admin ? `<div class="toolbar" style="margin-top:8px"><button class="btn btn-sm btn-outline" onclick="overviewRestart()">Restart</button></div>` : ''}
+      ${admin ? `<div class="toolbar" style="margin-top:8px"><button class="btn btn-sm btn-outline" onclick="overviewFlush(this)" title="Drop cached answers (SIGHUP) — no restart">Flush cache</button> <button class="btn btn-sm btn-outline" onclick="overviewRestart()">Restart</button></div>` : ''}
     </div>`;
 
   // Encrypted upstream is configured on the Settings page, not toggled here —
