@@ -10,7 +10,7 @@ FROM debian:trixie-slim
 # probe's own-address filter shell out to `ping` and `ip`, which the slim
 # base image does not carry.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        dnsmasq dnscrypt-proxy iputils-ping iproute2 \
+        dnsmasq dnsmasq-utils dnscrypt-proxy iputils-ping iproute2 bash \
         python3 python3-venv openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -24,6 +24,7 @@ COPY templates /opt/dnsmaq-mgr/templates
 COPY static /opt/dnsmaq-mgr/static
 COPY docker/entrypoint.sh /opt/dnsmaq-mgr/entrypoint.sh
 RUN chmod +x /opt/dnsmaq-mgr/entrypoint.sh
+COPY docker/healthcheck.py /opt/dnsmaq-mgr/healthcheck.py
 
 # /data holds everything mutable: auth.json, certs, state, rendered config,
 # leases, history.db.
@@ -34,5 +35,10 @@ ENV DNSMAQ_DATA_DIR=/data \
 EXPOSE 8443/tcp 53/tcp 53/udp 67/udp
 VOLUME /data
 WORKDIR /opt/dnsmaq-mgr
+
+# Liveness: 200 from /api/health means dnsmasq (and the encrypted upstream,
+# if enabled) is running.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD /opt/dnsmaq-mgr/venv/bin/python /opt/dnsmaq-mgr/healthcheck.py
 
 ENTRYPOINT ["/opt/dnsmaq-mgr/entrypoint.sh"]

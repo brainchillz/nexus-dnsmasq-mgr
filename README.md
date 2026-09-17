@@ -77,6 +77,13 @@ own `dnsmasq.conf` is never touched. Every change is:
   lines, and `dnsmasq --test` gates the swap — a broken or hostile download
   can never take out the rest of the configuration.
 
+### Blocklist allowlist
+- Names exempted from every list, subdomains included: rendered as
+  `server=/name/#` (so a broader block such as `example.com` no longer
+  covers `cdn.example.com`) and dropped from the rendered lists. Managed on
+  the Blocklists page, or with the **Allow** button on any blocked row of the
+  Query Log; carried in backups.
+
 ### Lookup & diagnosis
 - **One-click "where did that answer come from?"** — query the running
   dnsmasq for a name and every answer is attributed to its source: managed
@@ -100,6 +107,21 @@ own `dnsmasq.conf` is never touched. Every change is:
 
 ### DHCP
 - **Pools/ranges** with tag or per-interface scoping, netmask and lease time.
+- **Real-time lease events** — a rendered `dhcp-script` hook reports every
+  lease add/renew/expiry to the app over loopback UDP (`DNSMAQ_EVENT_PORT`,
+  default 8453). New-device alerts fire the moment a lease is handed out
+  instead of on the next 5-minute tick, the lease table refreshes itself,
+  and the last 200 events are listed. Events are only a trigger: the leases
+  file is re-read to confirm each one, so a spoofed datagram can at most
+  cause an early refresh.
+- **Release lease** — `dhcp_release` (dnsmasq-utils) sends a DHCPRELEASE for
+  a live lease to free the pool slot now, e.g. to move a device onto a new
+  reservation.
+- **MAC vendor names** — the IEEE OUI registry is fetched (first tick, then
+  every 30 days; or on demand from Settings) and kept locally; leases,
+  Network Scan and alerts show the manufacturer behind each MAC.
+- **Filter boxes and CSV export** on host records, static leases and live
+  leases (host records also export as a unix hosts file).
 - **Static leases** (MAC → IP + hostname), **options** with a picker of common
   ones (router, dns-server, ntp-server, TFTP, static routes…), both tag-aware.
 - **Live lease table** with expiry countdown and one-click **Reserve** (turn a
@@ -208,6 +230,9 @@ pinning, last-sync status — works the same.
   several names, record-vs-lease disagreements).
 
 ### Backup & restore
+- **Daily snapshots** (opt-in): a full backup, accounts included, written
+  under `<data>/backups` at a chosen hour and pruned to the newest N;
+  download, restore or delete any of them from Settings.
 - **Single-JSON export** of the full state — settings, DNS, DHCP, netboot,
   blocklist subscriptions, alert config, encrypted-upstream config, mirroring
   peers — with accounts/API
@@ -218,6 +243,26 @@ pinning, last-sync status — works the same.
   render → `dnsmasq --test` → atomic-swap pipeline; an invalid backup
   changes nothing. Blocklist data is re-fetched from the list URLs after a
   restore.
+
+### Onboarding: import an existing configuration
+- Paste a `dnsmasq.conf` (plus `dnsmasq.d` fragments) or **scan this host's
+  own `/etc/dnsmasq.conf` and `/etc/dnsmasq.d`** on the Config page.
+  Ranges, static leases, options, boot entries, host records (including
+  `addn-hosts` files), overrides, forwards and the global settings land in
+  the stores; anything else is offered as Extra Options; directives the app
+  owns (`conf-dir`, `dhcp-leasefile`, …) are skipped and listed. Preview
+  first, then merge or replace per section — every line goes through the
+  same validators as a UI edit, so a config dnsmasq tolerated but the app
+  would refuse is reported line by line rather than half-imported.
+
+### Monitoring
+- **Prometheus `/metrics`** (behind the normal auth — scrape with a
+  read-only API token): dnsmasq up/reachable, cache counters, active
+  leases, per-pool size and use, encrypted-upstream state, blocklist sizes,
+  last mirror push per source.
+- **`/api/health`** needs no token and answers 200 while dnsmasq (and the
+  encrypted upstream, if enabled) is running, 503 otherwise; the Docker
+  image ships a `HEALTHCHECK` on it.
 
 ### Web UI & security
 - HTTPS out of the box with a **self-signed certificate generated on first
@@ -256,7 +301,8 @@ What the installer does:
    mirror tokens survive.
 3. Writes `/etc/sudoers.d/dnsmaq-mgr` with **argument-pinned** rules — the
    app can run `systemctl start|stop|restart|kill -s HUP|is-active
-   dnsmasq`, `journalctl -u dnsmasq`, and the DHCP probe. Nothing else.
+   dnsmasq`, `journalctl -u dnsmasq`, the DHCP probe, and `dhcp_release`
+   (from `dnsmasq-utils`, for "Release lease"). Nothing else.
 4. Renders an initial safe config (DNS on with sane defaults, DHCP off) and
    points dnsmasq at it via a one-line drop-in
    `/etc/dnsmasq.d/zz-dnsmaq-mgr.conf` (`conf-dir=/var/lib/dnsmaq-mgr/render/dnsmasq.d`).
@@ -355,7 +401,9 @@ addresses `{domain, ip}` · forwards `{domain, upstream}` — all plus
 ### Blocklists
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/blocklists` | subscribed lists with entry counts and fetch state |
+| GET | `/api/blocklists` | subscribed lists with entry counts and fetch state, plus `allow[]` |
+| POST | `/api/blocklists/allow` | `{domain}` — exempt a name (and subdomains) from every list |
+| DELETE | `/api/blocklists/allow/<domain>` | remove an allowlist entry |
 | POST | `/api/blocklists` | subscribe `{name, url, refresh_hours?, enabled?}` — fetches immediately, response carries `fetch_ok`/`entries` |
 | POST | `/api/blocklists/<id>` | update (a changed URL refetches) |
 | POST | `/api/blocklists/<id>/refresh` | fetch now |
@@ -366,6 +414,10 @@ addresses `{domain, ip}` · forwards `{domain, upstream}` — all plus
 |---|---|---|
 | GET | `/api/backup?include_accounts=1` | full-state JSON download (accounts optional) |
 | POST | `/api/backup/restore` | `{backup, include_accounts?}` — all-or-nothing, re-validated, `dnsmasq --test`-gated |
+| GET/POST | `/api/backups` | daily-snapshot schedule `{enabled, hour, keep}` + the snapshot list |
+| POST | `/api/backups/run` | write a snapshot now |
+| GET/DELETE | `/api/backups/<name>` | download / delete a snapshot |
+| POST | `/api/backups/<name>/restore` | `{include_accounts?}` — restore from a local snapshot |
 
 ### Change history
 | Method | Path | Purpose |
@@ -393,8 +445,10 @@ addresses `{domain, ip}` · forwards `{domain, upstream}` — all plus
 | POST | `/api/dhcp/<coll>` | add — `coll` ∈ `ranges`, `static_leases`, `options` |
 | POST | `/api/dhcp/<coll>/<id>` | update |
 | DELETE | `/api/dhcp/<coll>/<id>` | delete |
-| GET | `/api/dhcp/leases` | live lease table (expiry, static/dynamic) |
+| GET | `/api/dhcp/leases` | live lease table (expiry, static/dynamic, vendor, `last_event_ts`) |
 | POST | `/api/dhcp/leases/reserve` | `{mac, ip, hostname?}` → static lease |
+| POST | `/api/dhcp/leases/release` | `{mac, ip}` → DHCPRELEASE via `dhcp_release` |
+| GET | `/api/dhcp/events` | recent lease events from the `dhcp-script` hook + listener state |
 
 Record shapes: ranges `{start, end, netmask?, lease, tag?|interface?}` ·
 static_leases `{mac, ip, hostname?, tag?}` · options `{option, value, tag?}`
@@ -429,6 +483,17 @@ static_leases `{mac, ip, hostname?, tag?}` · options `{option, value, tag?}`
 
 Mutating responses include the apply outcome:
 `{action: "reload"|"restart"|"none", changed: [files], service_ok, service_detail}`.
+
+### Import, vendor lookup, monitoring
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/import/preview` | `{text}` or `{scan: true}` → parsed sections, extra lines, skipped lines with reasons |
+| POST | `/api/import/apply` | same body + `{sections[], replace?, skip_invalid?}` → validated merge/replace through apply |
+| GET/POST | `/api/oui` | OUI table state / `{auto_refresh}` |
+| POST | `/api/oui/refresh` | fetch the IEEE registry now |
+| GET | `/api/oui/lookup/<mac>` | vendor for one MAC |
+| GET | `/metrics` | Prometheus exposition (auth required; use a read-only token) |
+| GET | `/api/health` | public liveness: 200 `{"status":"ok"}` / 503 `{"status":"degraded"}` |
 
 ### Statistics
 | Method | Path | Purpose |
@@ -493,6 +558,7 @@ Environment variables (all optional):
 | `DNSMAQ_ADMIN_PASSWORD` | random | first-run admin password |
 | `DNSMAQ_TICK_SECONDS` | `300` | stats sampling interval |
 | `DNSMAQ_DNS_PORT` | `53` | port for CHAOS stats queries (custom `port=` setups) |
+| `DNSMAQ_EVENT_PORT` | `8453` | loopback UDP port the `dhcp-script` hook reports lease events to |
 | `DNSMAQ_HISTORY_*` | 3 / 400 / 64 | raw days / daily days / DB size cap MB |
 | `DNSMAQ_AUTH_FILE` | `<data>/auth.json` | credentials store |
 | `DNSMAQ_DNSCRYPT_BIN` | `dnscrypt-proxy` | dnscrypt-proxy binary for the encrypted upstream |
@@ -500,7 +566,8 @@ Environment variables (all optional):
 Rendered layout under `<data>/render/` (regenerated on every change —
 never edit by hand; use the Config page's Extra Options for anything the UI
 doesn't cover): `dnsmasq.d/{00-main,10-dns,20-dhcp,30-boot,90-extra}.conf`,
-`hosts.d/managed-hosts`, `dhcp-hosts`, `dhcp-opts`. The encrypted upstream's
+`hosts.d/managed-hosts`, `dhcp-hosts`, `dhcp-opts`, `dnsmasq.d/40-allow.conf`
+(allowlist) and `lease-event.sh` (the dhcp-script hook). The encrypted upstream's
 `dnscrypt-proxy.toml` and cached resolver lists live under `<data>/encdns/`.
 
 CLI subcommands: `app.py set-password [user]` · `app.py render` (render +

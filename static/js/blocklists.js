@@ -37,7 +37,40 @@ async function page_blocklists() {
       never take out the rest of the configuration. Lists refresh automatically with the 5-minute stats tick.</p>
     ${admin ? `<div class="toolbar"><button class="btn btn-sm" onclick="blModal()">+ Subscribe to a list</button></div>` : ''}
     <table class="table"><thead><tr><th>List</th><th>Enabled</th><th>Entries</th><th>Refresh</th><th>Last fetch</th><th></th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="6">No blocklists subscribed</td></tr>'}</tbody></table>`;
+      <tbody>${rows || '<tr><td colspan="6">No blocklists subscribed</td></tr>'}</tbody></table>
+
+    <h3 style="margin-top:24px">Allowlist <span class="help">(${(b.allow || []).length} name${(b.allow || []).length === 1 ? '' : 's'})</span></h3>
+    <div class="card" style="max-width:640px">
+      <p class="help">Names exempted from every list, subdomains included. Rendered as <code>server=/name/#</code>
+        so a broader block (say <code>example.com</code>) no longer covers <code>cdn.example.com</code>, and the
+        name itself is dropped from the rendered lists. The Query Log's blocked rows have an <em>Allow</em> button.</p>
+      ${admin ? `<div class="toolbar"><input id="bl-allow-name" class="form-control" style="max-width:320px" placeholder="cdn.example.com" spellcheck="false"
+          onkeydown="if(event.key==='Enter'){blAllowAdd();return false}">
+        <button class="btn btn-sm" onclick="blAllowAdd()">Allow</button></div>` : ''}
+      ${(b.allow || []).length ? `<table class="table" style="margin-top:8px"><tbody>${(b.allow || []).map(d => `<tr>
+        <td><code>${escapeHtml(d)}</code></td>
+        <td class="row-actions">${admin ? `<button class="btn btn-sm btn-danger" onclick="blAllowRemove('${jsArg(d)}')">Remove</button>` : ''}</td></tr>`).join('')}</tbody></table>`
+        : '<p class="help">Nothing allowed yet.</p>'}
+    </div>`;
+}
+
+async function blAllowAdd() {
+  const domain = ($('bl-allow-name').value || '').trim();
+  if (!domain) return;
+  try {
+    const r = await API.post('/api/blocklists/allow', { domain });
+    notifyApply(r);
+    page_blocklists();
+  } catch (e) { alert(e.message); }
+}
+
+async function blAllowRemove(domain) {
+  if (!confirm(`Remove "${domain}" from the allowlist? The lists will block it again.`)) return;
+  try {
+    const r = await API.delete('/api/blocklists/allow/' + encodeURIComponent(domain));
+    notifyApply(r);
+    page_blocklists();
+  } catch (e) { alert(e.message); }
 }
 
 function blModal(id) {

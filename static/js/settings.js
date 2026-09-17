@@ -18,13 +18,15 @@ async function page_settings() {
       '<div class="alert alert-warning" style="margin-top:16px">Server settings require administrator access.</div>';
     return;
   }
-  const [s, tlsInfo, users, tokens, alerts, enc] = await Promise.all([
+  const [s, tlsInfo, users, tokens, alerts, enc, bk, ouiInfo] = await Promise.all([
     API.get('/api/settings'),
     API.get('/api/tls/info').catch(() => ({ present: false })),
     API.get('/api/users').catch(() => []),
     API.get('/api/tokens').catch(() => []),
     API.get('/api/alerts').catch(() => null),
     API.get('/api/encdns').catch(() => null),
+    API.get('/api/backups').catch(() => null),
+    API.get('/api/oui').catch(() => null),
   ]);
 
   const flag = (id, label, val, help) => `
@@ -70,6 +72,8 @@ async function page_settings() {
       ${flag('st-auth', 'DHCP authoritative (this is the only DHCP server on the LAN)', s.dhcp_authoritative)}
       ${flag('st-logq', 'Log DNS queries (verbose — feeds the Query Log page)', s.log_queries)}
       ${flag('st-logd', 'Log DHCP transactions', s.log_dhcp)}
+      ${flag('st-events', 'Report lease events in real time (dhcp-script hook → instant new-device alerts and lease table)', s.lease_events !== false,
+             'dnsmasq runs a tiny hook on every lease add/renew/expiry that tells the app over loopback UDP. Only rendered while DHCP is enabled.')}
       ${flag('st-nohosts', 'Ignore the system /etc/hosts (no-hosts — serve only managed host records)', s.no_hosts,
              'By default dnsmasq also answers from the /etc/hosts of this machine, which this app does not manage. Stray entries there can shadow managed records — the Lookup page can diagnose that.')}
       <div class="toolbar" style="margin-top:10px"><button class="btn" onclick="stSave()">Save &amp; Apply</button></div>
@@ -107,7 +111,9 @@ async function page_settings() {
     <div class="toolbar"><button class="btn btn-sm" onclick="tokenCreateModal()">+ Create token</button></div>
     <table class="table"><thead><tr><th>Name</th><th>Role</th><th>Created</th><th>Last used</th><th></th></tr></thead>
       <tbody>${tokenRows || '<tr><td colspan="5">No API tokens</td></tr>'}</tbody></table>
-    <p class="help">Tokens authenticate automation (<code>Authorization: Bearer dm_…</code>). Read-only tokens can GET everything; admin tokens can change config.</p>
+    <p class="help">Tokens authenticate automation (<code>Authorization: Bearer dm_…</code>). Read-only tokens can GET everything; admin tokens can change config.
+      Prometheus can scrape <code>/metrics</code> with a read-only token (<code>authorization: credentials: dm_…</code> in the scrape config);
+      <code>/api/health</code> needs no token and answers 200 while dnsmasq is running.</p>
 
     ${alerts ? `
     <h3 style="margin-top:24px">Alerts ${icon('bell', 'ico-sm')}</h3>
@@ -156,7 +162,42 @@ async function page_settings() {
         <button class="btn" onclick="backupDownload()">${icon('dl', 'ico-sm')} Download backup</button>
         <button class="btn btn-outline" onclick="restoreModal()">${icon('ul', 'ico-sm')} Restore from backup…</button>
       </div>
+      ${bk ? `
+      <h4 style="margin-top:16px">Automatic snapshots</h4>
+      <p class="help">A full backup (accounts included) written under <code>${escapeHtml(bk.dir)}</code> once a day, pruned to the newest N.
+        ${bk.last_run ? `Last run ${fmtTs(bk.last_run)} — ${escapeHtml(bk.last_status || '')}.` : 'Never run yet.'}</p>
+      ${flag('bk-enabled', 'Enable daily snapshots', bk.enabled)}
+      <div style="display:flex;gap:12px;max-width:420px">
+        <div class="form-group" style="flex:1"><label>Hour (local, 0–23)</label><input id="bk-hour" class="form-control" type="number" min="0" max="23" value="${bk.hour}"></div>
+        <div class="form-group" style="flex:1"><label>Keep (snapshots)</label><input id="bk-keep" class="form-control" type="number" min="1" max="365" value="${bk.keep}"></div>
+      </div>
+      <div class="toolbar">
+        <button class="btn btn-sm" onclick="bkSave()">Save schedule</button>
+        <button class="btn btn-sm btn-outline" onclick="bkRunNow(this)">Snapshot now</button>
+      </div>
+      ${(bk.snapshots || []).length ? `<table class="table" style="margin-top:8px"><thead><tr><th>Snapshot</th><th>Size</th><th></th></tr></thead><tbody>
+        ${bk.snapshots.slice(0, 20).map(f => `<tr><td><code>${escapeHtml(f.name)}</code><div class="help">${fmtTs(f.ts)}</div></td>
+          <td>${Math.round(f.size / 1024)} KB</td>
+          <td class="row-actions">
+            <a class="btn btn-sm btn-outline" href="/api/backups/${encodeURIComponent(f.name)}">Download</a>
+            <button class="btn btn-sm btn-outline" onclick="bkRestore('${jsArg(f.name)}')">Restore…</button>
+            <button class="btn btn-sm btn-danger" onclick="bkDelete('${jsArg(f.name)}')">Delete</button>
+          </td></tr>`).join('')}</tbody></table>` : ''}` : ''}
     </div>
+
+    ${ouiInfo ? `
+    <h3 style="margin-top:24px">MAC vendor lookup (IEEE OUI)</h3>
+    <div class="card" style="max-width:640px">
+      <p class="help">The IEEE OUI registry, fetched from <code>standards-oui.ieee.org</code> and kept locally, names the
+        manufacturer behind every MAC in the lease table, Network Scan and new-device alerts.
+        ${ouiInfo.present ? `<strong>${(ouiInfo.count || 0).toLocaleString()} assignments</strong>, fetched ${fmtTs(ouiInfo.fetched)}.` : '<strong>Not fetched yet.</strong>'}
+        ${ouiInfo.last_status && ouiInfo.last_status !== 'ok' ? `<span class="status-badge red" title="${escapeHtml(ouiInfo.last_status)}">last fetch failed</span>` : ''}</p>
+      ${flag('oui-auto', 'Fetch automatically (first tick, then every 30 days)', ouiInfo.auto_refresh !== false)}
+      <div class="toolbar">
+        <button class="btn btn-sm" onclick="ouiSave()">Save</button>
+        <button class="btn btn-sm btn-outline" onclick="ouiRefresh(this)">Fetch now</button>
+      </div>
+    </div>` : ''}
     ${appearanceSection()}`;
 
   if (enc) encModeChanged();   // grey out providers the current mode can't use
@@ -323,6 +364,47 @@ async function restoreGo(btn) {
   } finally { btn.disabled = false; }
 }
 
+// ─── Automatic snapshots ────────────────────────────────
+async function bkSave() {
+  try {
+    await API.post('/api/backups', { enabled: $('bk-enabled').checked,
+      hour: parseInt($('bk-hour').value, 10), keep: parseInt($('bk-keep').value, 10) });
+    page_settings();
+  } catch (e) { alert(e.message); }
+}
+async function bkRunNow(btn) {
+  btn.disabled = true; btn.textContent = 'Writing…';
+  try { const r = await API.post('/api/backups/run', {}); alert('Snapshot written: ' + r.name); page_settings(); }
+  catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Snapshot now'; }
+}
+async function bkDelete(name) {
+  if (!confirm(`Delete snapshot ${name}?`)) return;
+  try { await API.delete('/api/backups/' + encodeURIComponent(name)); page_settings(); }
+  catch (e) { alert(e.message); }
+}
+async function bkRestore(name) {
+  const accounts = confirm(`Restore this node from ${name}?\n\nOK = configuration AND accounts/tokens (may sign you out)\nCancel = ask again for configuration only`) ||
+    null;
+  if (accounts === null && !confirm(`Restore configuration only from ${name}?`)) return;
+  try {
+    const r = await API.post('/api/backups/' + encodeURIComponent(name) + '/restore', { include_accounts: !!accounts });
+    notifyApply(r);
+    alert('Restored: ' + r.restored.join(', ') + (r.accounts_restored ? ' · accounts replaced' : ''));
+    page_settings();
+  } catch (e) { alert(e.message); }
+}
+
+// ─── OUI vendor table ───────────────────────────────────
+async function ouiSave() {
+  try { await API.post('/api/oui', { auto_refresh: $('oui-auto').checked }); page_settings(); }
+  catch (e) { alert(e.message); }
+}
+async function ouiRefresh(btn) {
+  btn.disabled = true; btn.textContent = 'Fetching…';
+  try { const r = await API.post('/api/oui/refresh', {}); alert('OUI table updated: ' + r.detail); page_settings(); }
+  catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Fetch now'; }
+}
+
 async function stSave() {
   // A blank cache field must not silently become cache-size=0 (caching OFF).
   const cacheRaw = $('st-cache').value.trim();
@@ -345,6 +427,7 @@ async function stSave() {
     log_queries: $('st-logq').checked,
     log_dhcp: $('st-logd').checked,
     no_hosts: $('st-nohosts').checked,
+    lease_events: $('st-events').checked,
   };
   try {
     const r = await API.post('/api/settings', body);

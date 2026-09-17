@@ -48,7 +48,8 @@ LOCKOUT_WINDOW = 300  # seconds
 # Endpoints reachable without a session (BARE endpoint names — the blueprint
 # prefix is stripped before comparison). mirror_receive authenticates itself
 # with the dedicated mirror bearer token.
-PUBLIC_ENDPOINTS = {'api_login', 'api_me', 'index', 'static', 'mirror_receive', 'sso_callback'}
+PUBLIC_ENDPOINTS = {'api_login', 'api_me', 'index', 'static', 'mirror_receive', 'sso_callback',
+                    'api_health'}
 
 # Mutating endpoints a non-admin (read-only) account is still allowed to call.
 RBAC_EXEMPT = {'api_logout', 'change_password'}

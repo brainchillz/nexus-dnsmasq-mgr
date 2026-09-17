@@ -59,6 +59,8 @@ if __name__ == '__main__':
         if not ok:
             print('WARNING: dnsmasq failed to start: %s' % detail, flush=True)
     stats.start_ticker()
+    from dnsmaqmgr import events
+    events.start_listener()
     ssl_context = None
     if config.TLS_ENABLED:
         tls.ensure_tls_cert()

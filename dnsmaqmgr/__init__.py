@@ -20,13 +20,13 @@ def create_app():
     from .core import auth, tls, history
     from . import (dnsmasq, settings, dns, dhcp, netboot, stats, peers, mirror,
                    lookup, querylog, blocklists, backup, changelog, alerts, recon,
-                   encdns)
+                   encdns, metrics, oui, events, importer)
 
     app.before_request(auth.require_login)
 
     for mod in (auth, tls, history, dnsmasq, settings, dns, dhcp, netboot,
                 stats, peers, mirror, lookup, querylog, blocklists, backup,
-                changelog, alerts, recon, encdns):
+                changelog, alerts, recon, encdns, metrics, oui, events, importer):
         app.register_blueprint(mod.bp)
 
     @app.route('/')

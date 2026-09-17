@@ -33,6 +33,16 @@ async function qlEnableLogging() {
   } catch (e) { alert(e.message); }
 }
 
+async function qlAllow(name, btn) {
+  if (!confirm(`Allow "${name}" (and its subdomains) through every blocklist?`)) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Allowing…'; }
+  try {
+    const r = await API.post('/api/blocklists/allow', { domain: name });
+    notifyApply(r);
+    if (btn) btn.textContent = 'Allowed ✓';
+  } catch (e) { alert(e.message); if (btn) { btn.disabled = false; btn.textContent = 'Allow'; } }
+}
+
 function _qlTopTable(title, pairs, valueHead) {
   if (!pairs || !pairs.length) return '';
   const rows = pairs.map(([k, n]) =>
@@ -86,7 +96,8 @@ async function qlRefresh() {
       <td><span class="badge-type">${escapeHtml(en.qtype)}</span></td>
       <td><code>${escapeHtml(en.name)}</code></td>
       <td>${escapeHtml(en.client)}</td>
-      <td><span class="status-badge ${QL_STATUS_BADGE[en.status] || 'gray'}">${escapeHtml(en.status)}</span></td>
+      <td><span class="status-badge ${QL_STATUS_BADGE[en.status] || 'gray'}">${escapeHtml(en.status)}</span>
+          ${en.status === 'blocked' && currentRole === 'admin' ? `<button class="btn btn-sm btn-outline" style="margin-left:6px" title="Exempt this name (and subdomains) from every blocklist" onclick="qlAllow('${jsArg(en.name)}', this)">Allow</button>` : ''}</td>
       <td>${ans || (en.upstreams && en.upstreams.length ? '→ ' + escapeHtml(en.upstreams.join(', ')) : '')}</td>
     </tr>`;
   }).join('');

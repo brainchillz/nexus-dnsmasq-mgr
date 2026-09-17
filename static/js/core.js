@@ -149,6 +149,43 @@ function sparkline(points, opts) {
   return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${d}" fill="none" stroke="var(--primary,#c1550f)" stroke-width="1.5"/></svg>`;
 }
 
+// ─── Table search + export ──────────────────────────────
+// Client-side row filter: hides <tbody> rows of `tableId` whose text does not
+// contain every space-separated term typed into `inputId`.
+function tableFilter(inputId, tableId, countId) {
+  const q = ($(inputId).value || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = document.querySelectorAll(`#${tableId} tbody tr[data-row]`);
+  let shown = 0;
+  rows.forEach(tr => {
+    const text = tr.textContent.toLowerCase();
+    const ok = q.every(t => text.includes(t));
+    tr.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  });
+  const c = countId && $(countId);
+  if (c) c.textContent = q.length ? `${shown} of ${rows.length}` : `${rows.length}`;
+}
+function filterBox(inputId, tableId, countId, placeholder) {
+  return `<input id="${inputId}" class="form-control" style="max-width:280px;display:inline-block" placeholder="${escapeHtml(placeholder || 'filter…')}"
+    oninput="tableFilter('${inputId}','${tableId}','${countId || ''}')" autocomplete="off" spellcheck="false">
+    ${countId ? `<span id="${countId}" class="help" style="margin-left:6px"></span>` : ''}`;
+}
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function downloadText(filename, text, mime) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: mime || 'text/plain' }));
+  a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function downloadCsv(filename, header, rows) {
+  const lines = [header.map(csvCell).join(',')].concat(rows.map(r => r.map(csvCell).join(',')));
+  downloadText(filename, lines.join('\n') + '\n', 'text/csv');
+}
+
 // Surface the apply pipeline's service outcome after a successful save.
 function notifyApply(r) {
   if (r && r.service_ok === false) {

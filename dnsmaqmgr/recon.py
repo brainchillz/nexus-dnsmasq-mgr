@@ -113,12 +113,14 @@ def cross_reference(alive, neigh, hosts, leases, settings):
     for h in recs:
         names_by_ip.setdefault(h['a'], []).append(h['name'])
 
+    from . import oui
     unnamed = []
     for ip in sorted(live, key=lambda s: int(ipaddress.IPv4Address(s))):
         lease = lease_by_ip.get(ip)
         if ip in names_by_ip or (lease and lease.get('hostname')):
             continue
-        unnamed.append({'ip': ip, 'mac': neigh.get(ip, '') or (lease or {}).get('mac', ''),
+        mac = neigh.get(ip, '') or (lease or {}).get('mac', '')
+        unnamed.append({'ip': ip, 'mac': mac, 'vendor': oui.vendor(mac),
                         'alive': ip in alive, 'has_lease': bool(lease)})
 
     stale = []

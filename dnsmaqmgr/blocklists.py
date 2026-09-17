@@ -178,13 +178,22 @@ def refresh_due():
 
 class BlockIndex:
     """Suffix-matching index over the enabled lists' fetched domains, mirroring
-    address=/domain/ semantics (a listed domain covers its subdomains)."""
+    address=/domain/ semantics (a listed domain covers its subdomains). An
+    allowlisted name (or one beneath it) never matches — that is what the
+    rendered server=/d/# does."""
 
-    def __init__(self, sets):
+    def __init__(self, sets, allow=()):
         self._sets = sets  # [(list name, frozenset of domains)]
+        self._allow = frozenset(allow)
+
+    def allowed(self, name):
+        labels = name.lower().rstrip('.').split('.')
+        return any('.'.join(labels[i:]) in self._allow for i in range(len(labels)))
 
     def match(self, name):
         """Return (list_name, matched_domain) for the most specific hit, or None."""
+        if self._allow and self.allowed(name):
+            return None
         labels = name.lower().rstrip('.').split('.')
         for i in range(len(labels)):
             cand = '.'.join(labels[i:])
@@ -196,7 +205,8 @@ class BlockIndex:
 
 def load_block_index():
     sets = []
-    for rec in load_store('blocklists').get('lists', []):
+    b = load_store('blocklists')
+    for rec in b.get('lists', []):
         if not rec.get('enabled', True):
             continue
         try:
@@ -205,7 +215,57 @@ def load_block_index():
                              frozenset(l.strip() for l in f if l.strip())))
         except OSError:
             pass
-    return BlockIndex(sets)
+    return BlockIndex(sets, b.get('allow', []))
+
+
+# ─── Allowlist ────────────────────────────────────────────────────────
+
+def normalize_allow(domain):
+    d = str(domain or '').strip().lower().rstrip('.')
+    if not d or not RE_DOMAIN.match(d) or is_ipv4(d) or is_ipv6(d):
+        return None
+    return d
+
+
+@bp.route('/api/blocklists/allow', methods=['POST'])
+def allow_add():
+    body, e = json_object()
+    if e:
+        return e
+    dom = normalize_allow(body.get('domain'))
+    if not dom:
+        return err('Invalid domain')
+
+    def mutate():
+        b = load_store('blocklists')
+        allow = list(b.get('allow', []))
+        if dom not in allow:
+            allow.append(dom)
+        b['allow'] = sorted(allow)
+        save_store('blocklists', b)
+
+    res = apply_change(mutate, sections=['blocklists'])
+    if isinstance(res, tuple):
+        return res
+    return jsonify({'success': True, 'domain': dom,
+                    'allow': load_store('blocklists').get('allow', []), **res})
+
+
+@bp.route('/api/blocklists/allow/<domain>', methods=['DELETE'])
+def allow_remove(domain):
+    dom = normalize_allow(domain)
+    if not dom or dom not in load_store('blocklists').get('allow', []):
+        return err('Not on the allowlist', 404)
+
+    def mutate():
+        b = load_store('blocklists')
+        b['allow'] = [d for d in b.get('allow', []) if d != dom]
+        save_store('blocklists', b)
+
+    res = apply_change(mutate, sections=['blocklists'])
+    if isinstance(res, tuple):
+        return res
+    return jsonify({'success': True, 'allow': load_store('blocklists').get('allow', []), **res})
 
 
 # ─── Routes ───────────────────────────────────────────────────────────

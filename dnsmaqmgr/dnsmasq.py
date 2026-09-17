@@ -121,6 +121,10 @@ def render_main(settings, encdns=None):
     # App-owned leases file: lets the app read lease state without sudo on
     # every platform, and keeps leases on the Docker volume.
     lines.append('dhcp-leasefile=%s' % LEASES_FILE)
+    if settings.get('dhcp_enabled') and settings.get('lease_events', True):
+        # Lease add/renew/expiry → the app, in real time (events.py). The
+        # hook is rendered alongside the config (see render_all).
+        lines.append('dhcp-script=%s' % HOOK_SCRIPT)
     return '\n'.join(lines) + '\n'
 
 
@@ -248,6 +252,34 @@ def render_extra(settings):
 
 
 BLOCKLIST_CONF_PREFIX = 'dnsmasq.d/50-block-'
+ALLOW_CONF = 'dnsmasq.d/40-allow.conf'
+HOOK_REL = 'lease-event.sh'
+HOOK_SCRIPT = os.path.join(RENDER_DIR, HOOK_REL)
+# Files written executable (everything else is 0644).
+EXEC_FILES = {HOOK_REL}
+
+
+def _allowed(dom, allow):
+    """address=/d/ covers d and its subdomains, so an allowed name exempts
+    exactly those list entries — the ones equal to it or beneath it."""
+    labels = dom.split('.')
+    for i in range(len(labels)):
+        if '.'.join(labels[i:]) in allow:
+            return True
+    return False
+
+
+def render_allow(blocklists):
+    """Allowlisted domains: `server=/d/#` routes d (and subdomains) to the
+    normal upstreams, which beats an address=/parent/ block — the case
+    dropping the entry from the lists alone cannot fix."""
+    lines = [HEADER, '# Blocklist allowlist: exempt these names (and subdomains) from every list']
+    allow = sorted(set(blocklists.get('allow', [])))
+    if not allow:
+        lines.append('# (empty)')
+    for d in allow:
+        lines.append('server=/%s/#' % d)
+    return '\n'.join(lines) + '\n'
 
 
 def blocklist_domains_path(list_id):
@@ -261,14 +293,15 @@ _BLOCK_CACHE = {}
 _BLOCK_CACHE_LOCK = threading.Lock()
 
 
-def _blocklist_block(path):
+def _blocklist_block(path, allow=()):
     """The address= lines for one domains file as a single string, or None
-    when the file is missing. Cached by mtime+size; the file is written
-    atomically (os.replace), so a stale read of a half-written file cannot
-    happen and the key fully identifies the content."""
+    when the file is missing. Cached by mtime+size+allowlist; the file is
+    written atomically (os.replace), so a stale read of a half-written file
+    cannot happen and the key fully identifies the content."""
+    allow = frozenset(allow)
     try:
         st = os.stat(path)
-        key = (st.st_mtime_ns, st.st_size)
+        key = (st.st_mtime_ns, st.st_size, allow)
         with _BLOCK_CACHE_LOCK:
             hit = _BLOCK_CACHE.get(path)
         if hit and hit[0] == key:
@@ -277,7 +310,7 @@ def _blocklist_block(path):
         with open(path) as f:
             for raw in f:
                 dom = raw.strip()
-                if dom and RE_DOMAIN.match(dom):
+                if dom and RE_DOMAIN.match(dom) and not (allow and _allowed(dom, allow)):
                     lines.append('address=/%s/0.0.0.0' % dom)
     except OSError:
         with _BLOCK_CACHE_LOCK:
@@ -289,13 +322,13 @@ def _blocklist_block(path):
     return block
 
 
-def render_blocklist(rec):
+def render_blocklist(rec, allow=()):
     """One conf file per subscribed list, from its fetched domains file.
     Domains are validated at fetch time; RE_DOMAIN is re-checked (in
     _blocklist_block) so a tampered domains file still can't smuggle
-    directives into the config."""
+    directives into the config. Allowlisted names are left out."""
     lines = [HEADER, '# Blocklist: %s (%s)' % (rec.get('name', ''), rec.get('url', ''))]
-    block = _blocklist_block(blocklist_domains_path(rec['id']))
+    block = _blocklist_block(blocklist_domains_path(rec['id']), allow)
     if block is None:
         lines.append('# (not fetched yet)')
     elif block:
@@ -322,9 +355,13 @@ def render_all(stores=None):
         'hosts.d/managed-hosts': render_hosts(d),
         'dhcp-hosts': render_dhcp_hosts(h, s),
         'dhcp-opts': render_dhcp_opts(h, s),
+        ALLOW_CONF: render_allow(stores['blocklists']),
     }
+    allow = frozenset(stores['blocklists'].get('allow', []))
     for rec in _enabled(stores['blocklists'].get('lists', [])):
-        rendered['%s%s.conf' % (BLOCKLIST_CONF_PREFIX, rec['id'])] = render_blocklist(rec)
+        rendered['%s%s.conf' % (BLOCKLIST_CONF_PREFIX, rec['id'])] = render_blocklist(rec, allow)
+    from . import events
+    rendered[HOOK_REL] = events.hook_script()
     return rendered
 
 
@@ -384,7 +421,7 @@ def write_render(rendered):
     for rel, text in rendered.items():
         path = os.path.join(RENDER_DIR, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        write_text_atomic(path, text, 0o644)
+        write_text_atomic(path, text, 0o755 if rel in EXEC_FILES else 0o644)
 
 
 def prune_blocklist_confs(rendered):

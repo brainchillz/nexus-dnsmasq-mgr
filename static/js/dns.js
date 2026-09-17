@@ -10,7 +10,7 @@ async function page_dns() {
   const admin = currentRole === 'admin';
   const canHosts = admin && !hostsLocked, canDns = admin && !dnsLocked;
 
-  const hostRows = d.hosts.map(h => `<tr>
+  const hostRows = d.hosts.map(h => `<tr data-row>
     <td><code>${escapeHtml(h.name)}</code></td>
     <td>${escapeHtml(h.a || '-')}</td>
     <td>${escapeHtml(h.aaaa || '-')}</td>
@@ -50,11 +50,14 @@ async function page_dns() {
     ${lockedBanner('hosts')}${lockedBanner('dns')}
     <div id="dns-audit"></div>
     <h3>Host Records <span class="help">(the dnsmasq hosts file: name &rarr; A/AAAA)</span></h3>
-    ${canHosts ? `<div class="toolbar">
-      <button class="btn btn-sm" onclick="dnsHostModal()">+ Add host record</button>
-      <button class="btn btn-sm btn-outline" onclick="dnsImportModal()">${icon('dl', 'ico-sm')} Import hosts file</button>
-    </div>` : ''}
-    <table class="table"><thead><tr><th>Name</th><th>A (IPv4)</th><th>AAAA (IPv6)</th><th>State</th><th>Comment</th><th></th></tr></thead>
+    <div class="toolbar">
+      ${canHosts ? `<button class="btn btn-sm" onclick="dnsHostModal()">+ Add host record</button>
+      <button class="btn btn-sm btn-outline" onclick="dnsImportModal()">${icon('dl', 'ico-sm')} Import hosts file</button>` : ''}
+      <button class="btn btn-sm btn-outline" onclick="dnsExportHosts('csv')" title="Download the host records as CSV">${icon('ul', 'ico-sm')} CSV</button>
+      <button class="btn btn-sm btn-outline" onclick="dnsExportHosts('hosts')" title="Download as a unix hosts file">${icon('ul', 'ico-sm')} hosts file</button>
+      ${filterBox('dns-filter', 'dns-hosts-table', 'dns-filter-count', 'filter name / address / comment…')}
+    </div>
+    <table class="table" id="dns-hosts-table"><thead><tr><th>Name</th><th>A (IPv4)</th><th>AAAA (IPv6)</th><th>State</th><th>Comment</th><th></th></tr></thead>
       <tbody>${hostRows || '<tr><td colspan="6">No host records</td></tr>'}</tbody></table>
 
     <h3 style="margin-top:24px">CNAMEs</h3>
@@ -80,6 +83,25 @@ async function page_dns() {
     </div>
     ${canDns ? `<button class="btn" onclick="dnsSaveUpstreams()">Save upstreams</button>` : ''}`;
   renderAuditBanner('dns-audit');
+  tableFilter('dns-filter', 'dns-hosts-table', 'dns-filter-count');
+}
+
+function dnsExportHosts(kind) {
+  const hosts = (_dnsData && _dnsData.hosts) || [];
+  const stamp = new Date().toISOString().slice(0, 10);
+  if (kind === 'hosts') {
+    const lines = ['# DNSMAQ-MGR host records export ' + stamp];
+    hosts.forEach(h => {
+      const c = h.comment ? '  # ' + h.comment.replace(/[\r\n]/g, ' ') : '';
+      const pre = h.enabled === false ? '# disabled: ' : '';
+      if (h.a) lines.push(`${pre}${h.a}\t${h.name}${c}`);
+      if (h.aaaa) lines.push(`${pre}${h.aaaa}\t${h.name}${c}`);
+    });
+    downloadText(`dnsmaq-hosts-${stamp}.txt`, lines.join('\n') + '\n');
+    return;
+  }
+  downloadCsv(`dnsmaq-host-records-${stamp}.csv`, ['name', 'a', 'aaaa', 'enabled', 'comment', 'id'],
+    hosts.map(h => [h.name, h.a || '', h.aaaa || '', h.enabled === false ? 'no' : 'yes', h.comment || '', h.id]));
 }
 
 function _rec(coll, id) { return (_dnsData[coll] || []).find(r => r.id === id) || {}; }

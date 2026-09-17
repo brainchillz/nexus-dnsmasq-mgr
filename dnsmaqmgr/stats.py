@@ -192,6 +192,16 @@ def start_ticker():
                 alerts.tick()
             except Exception as e:
                 print('alerts tick failed: %s' % e, flush=True)
+            try:
+                from . import oui
+                oui.refresh_due()
+            except Exception as e:
+                print('OUI refresh tick failed: %s' % e, flush=True)
+            try:
+                from . import backup
+                backup.tick()
+            except Exception as e:
+                print('backup tick failed: %s' % e, flush=True)
 
     threading.Thread(target=loop, daemon=True).start()
 

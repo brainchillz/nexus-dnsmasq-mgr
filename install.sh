@@ -35,7 +35,7 @@ echo ""
 
 info "Installing prerequisite packages..."
 apt-get update -qq
-apt-get install -y -qq dnsmasq python3 python3-venv openssl curl >/dev/null
+apt-get install -y -qq dnsmasq dnsmasq-utils python3 python3-venv openssl curl >/dev/null
 
 # dnscrypt-proxy backs the opt-in encrypted DNS upstream. Not every release
 # ships it (Debian 12 dropped it; Ubuntu and Debian 13 have it) and its
@@ -121,6 +121,12 @@ $APP_USER ALL=(ALL) NOPASSWD: $JOURNALCTL -u dnsmasq -n 200 --no-pager
 # through cli.dispatch to start the whole web server as root.
 $APP_USER ALL=(ALL) NOPASSWD: $APP_DIR/venv/bin/python $APP_DIR/app.py dhcp-probe, $APP_DIR/venv/bin/python $APP_DIR/app.py dhcp-probe *
 EOF
+# "Release lease" needs a raw socket (dnsmasq-utils' dhcp_release); its only
+# arguments are <iface> <ip> <mac>, validated by the app before the call.
+DHCP_RELEASE="$(command -v dhcp_release || true)"
+if [ -n "$DHCP_RELEASE" ]; then
+    echo "$APP_USER ALL=(ALL) NOPASSWD: $DHCP_RELEASE *" >> /etc/sudoers.d/dnsmaq-mgr
+fi
 chmod 440 /etc/sudoers.d/dnsmaq-mgr
 visudo -cf /etc/sudoers.d/dnsmaq-mgr >/dev/null
 

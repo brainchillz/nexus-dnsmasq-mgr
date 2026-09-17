@@ -28,8 +28,9 @@ async function page_recon() {
 
     const unnamed = l.unnamed_devices.length ? `
       <h3 style="margin-top:18px">Unnamed devices <span class="help">(alive on the network, no host record or lease hostname)</span></h3>
-      <table class="table"><thead><tr><th>IP</th><th>MAC</th><th>Seen via</th><th></th></tr></thead><tbody>
+      <table class="table"><thead><tr><th>IP</th><th>MAC</th><th>Vendor</th><th>Seen via</th><th></th></tr></thead><tbody>
         ${l.unnamed_devices.map(d => `<tr><td><code>${escapeHtml(d.ip)}</code></td><td><code>${escapeHtml(d.mac || '-')}</code></td>
+          <td class="help">${escapeHtml(d.vendor || '')}</td>
           <td class="help">${d.alive ? 'ping' : 'ARP'}${d.has_lease ? ' · has lease' : ''}</td>
           <td class="row-actions">${canName ? `<button class="btn btn-sm" onclick="reconNameModal('${jsArg(d.ip)}','${jsArg(d.mac || '')}')">+ Create record</button>` : ''}</td></tr>`).join('')}
       </tbody></table>` : '';

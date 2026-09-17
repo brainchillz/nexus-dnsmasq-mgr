@@ -3,37 +3,9 @@
 Feature ideas not yet scheduled. Roughly ordered by value; items are
 independent unless noted.
 
-## 8. Prometheus `/metrics` endpoint
-
-Reuse the stats collector; expose current counters and pool utilization for
-Grafana without touching the SQLite history.
-
 ## 9. Wake-on-LAN from the lease table
 
 The MACs are already there; add a WoL button per lease/static lease.
-
-## 10. Existing-config importer
-
-Onboarding: parse an existing `dnsmasq.conf` / `dnsmasq.d` into the app's
-stores (ranges, static leases, options, host records). Current import only
-handles hosts files.
-
-## 12. Full recursion (unbound)
-
-Spun out of item 11, which deliberately rejected it *for the network-path
-goal*: recursion removes the third-party resolver but still talks plaintext
-port 53 to root/TLD/authoritative servers, so the on-path observer loses
-nothing. It remains interesting for the opposite threat model — "don't trust
-any resolver operator" — as a third upstream shape beside the encrypted
-modes. Oblivious DoH is another candidate selector value there.
-
-## 13. Blocklist allowlist
-
-A per-node list of domains stripped from every rendered blocklist, plus an
-"allow this" action on the Query Log blocked column. The most common blocklist
-complaint ("it blocked something I need"); a small change in
-`render_blocklist` plus a store field, and it composes with item 14's
-persistent log.
 
 ## 14. Persistent query log
 
@@ -41,37 +13,6 @@ Store parsed queries in the existing SQLite ring buffer with retention, add
 search by client and domain, and lift the 200-line journal window on bare
 metal (the sudoers pin). Today the live view loses everything older than a
 few dozen queries.
-
-## 15. Real-time lease events via `dhcp-script`
-
-A tiny script posting lease add/del/old to a local socket the app owns. Lets
-new-device alerts and the lease table update instantly instead of on the
-5-minute tick, and enables "release lease" from the UI. Also the natural
-feed for an IPAM's lease overlay.
-
-## 16. OUI vendor lookup
-
-Fetch the IEEE OUI list the way blocklists are fetched (scheduled, cached
-under DATA_DIR) and show the manufacturer next to MACs in the lease table and
-Network Scan. Makes "unnamed devices" identifiable.
-
-## 17. Scheduled local backups + health endpoint
-
-Reuse `backup_export` to write a dated snapshot under DATA_DIR nightly with
-retention. Add an unauthenticated `/api/health` (running / not, version) and
-a Dockerfile `HEALTHCHECK` on it.
-
-## 18. Table search, filtering and CSV export
-
-Host records, static leases and live leases get a filter box and a CSV
-export (hosts-file export for host records). The pages get unwieldy past
-about fifty rows.
-
-## 19. Two-factor (TOTP) for admin logins
-
-Server-enforced, per user, optional. Sessions, tokens and SSO are all in
-place, so it slots into `api_login`. Worth it the moment the UI is reachable
-beyond the LAN.
 
 ## 20. Mirror-aware rollback and restore
 
@@ -85,6 +26,16 @@ was reverted, re-push from the source" state); the defect half is in fix.md.
 
 ## Shipped
 
+- **2026-09-17 — 8, 10, 13, 15, 16, 17, 18 (v0.5.0).** Prometheus
+  `/metrics` (read-only token) + public `/api/health` + Docker HEALTHCHECK;
+  existing-config importer (paste or scan the host's dnsmasq.conf/dnsmasq.d,
+  preview, validated merge/replace, Config page); blocklist allowlist
+  (`server=/d/#` + list filtering, Allow button on the Query Log); real-time
+  lease events via a rendered `dhcp-script` hook over loopback UDP (instant
+  new-device alerts, live lease table, Release lease via `dhcp_release`);
+  IEEE OUI vendor lookup (leases, Network Scan, alerts); daily local
+  snapshots with retention, download/restore/delete from Settings; filter
+  boxes and CSV / hosts-file export on host records, static and live leases.
 - **2026-08-05 — 11. Encrypted DNS upstream (opt-in).** dnsmasq →
   supervised dnscrypt-proxy on loopback → encrypted hop, both modes (direct
   DoH/DNSCrypt and anonymized relay) behind one selector; fail-closed by

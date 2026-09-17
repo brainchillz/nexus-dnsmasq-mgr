@@ -15,14 +15,17 @@ they are re-fetched from their URLs after a restore.
 Both endpoints are admin-only: the export carries peer mirror tokens and
 credential hashes, which a read-only account must not see.
 """
+import os
+import re
 import copy
+import json
 import time
 import threading
 from datetime import datetime
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 
 from .core.auth import RE_USERNAME, _is_admin, load_config, save_config
-from .core.config import APP_VERSION
+from .core.config import APP_VERSION, DATA_DIR, write_json_atomic
 from .core.runcmd import err, json_object
 from .core.store import DEFAULTS, STORE_LOCK, load_store, save_store
 from .core.validators import RE_COMMENT, RE_FINGERPRINT, is_ipv4
@@ -36,19 +39,25 @@ BACKUP_STORES = ('settings', 'dns', 'dhcp', 'netboot', 'blocklists', 'alerts',
 SETTINGS_TOGGLES = ('dns_enabled', 'dhcp_enabled', 'mirror_accept')
 
 
-@bp.route('/api/backup')
-def backup_export():
-    if not _is_admin():
-        return err('Administrator access required', 403)
+def export_payload(include_accounts=False):
     with STORE_LOCK:
         stores = {n: load_store(n) for n in BACKUP_STORES}
     payload = {'app': 'dnsmaq-mgr', 'version': APP_VERSION,
                'created': int(time.time()), 'stores': stores}
-    if (request.args.get('include_accounts') or '').lower() in ('1', 'true', 'yes'):
+    if include_accounts:
         cfg = load_config()
         # Password/token hashes only — the secrets themselves are never stored.
         payload['accounts'] = {'users': cfg.get('users', {}),
                                'tokens': cfg.get('tokens', [])}
+    return payload
+
+
+@bp.route('/api/backup')
+def backup_export():
+    if not _is_admin():
+        return err('Administrator access required', 403)
+    payload = export_payload((request.args.get('include_accounts') or '').lower()
+                             in ('1', 'true', 'yes'))
     resp = jsonify(payload)
     resp.headers['Content-Disposition'] = (
         'attachment; filename=dnsmaq-backup-%s.json'
@@ -150,6 +159,12 @@ def _staged_settings(src):
 def _staged_blocklists(src):
     from . import blocklists as bl_mod
     from .mirror import _keep_id
+    allow = []
+    for raw in src.get('allow') or []:
+        dom = bl_mod.normalize_allow(raw)
+        if not dom:
+            raise ValueError('blocklists: invalid allowlist entry %r' % (raw,))
+        allow.append(dom)
     recs = []
     for raw in src.get('lists') or []:
         rec, e = bl_mod._validate(raw, existing=raw)
@@ -161,7 +176,7 @@ def _staged_blocklists(src):
         rec.update({'entries': 0, 'last_fetch': 0, 'last_attempt': 0,
                     'last_status': ''})
         recs.append(rec)
-    return {'serial': int(src.get('serial') or 0), 'lists': recs}
+    return {'serial': int(src.get('serial') or 0), 'lists': recs, 'allow': sorted(set(allow))}
 
 
 def _staged_peers(src):
@@ -236,7 +251,11 @@ def backup_restore():
     body, e = json_object()
     if e:
         return e
-    payload = body.get('backup')
+    return restore_payload(body.get('backup'), bool(body.get('include_accounts')))
+
+
+def restore_payload(payload, include_accounts=False):
+    """Validate and apply one backup payload (upload or local snapshot)."""
     if not isinstance(payload, dict) or payload.get('app') != 'dnsmaq-mgr':
         return err('Not a DNSMAQ-MGR backup file', 422)
     stores = payload.get('stores')
@@ -250,7 +269,7 @@ def backup_restore():
                 staged[name] = stage(stores[name] or {})
         if 'peers' in stores:
             staged_peers = _staged_peers(stores['peers'] or {})
-        if body.get('include_accounts') and 'accounts' in payload:
+        if include_accounts and 'accounts' in payload:
             staged_accounts = _staged_accounts(payload['accounts'] or {})
     except ValueError as ve:
         return err('Backup failed validation — nothing restored: %s' % ve, 422)
@@ -300,3 +319,159 @@ def backup_restore():
                     'accounts_restored': staged_accounts is not None,
                     'blocklists_refreshing': bool(staged.get('blocklists', {}).get('lists')),
                     **res})
+
+
+# ─── Scheduled local snapshots ────────────────────────────────────────
+# Nightly full-state files under DATA_DIR/backups (accounts included, so a
+# snapshot restores a node completely), pruned to `keep`. Driven by the
+# stats ticker; the hour is local time.
+
+BACKUPS_DIR = os.path.join(DATA_DIR, 'backups')
+RE_SNAPSHOT = re.compile(r'^dnsmaq-backup-\d{8}-\d{6}\.json\Z')
+
+
+def _snapshots():
+    try:
+        names = sorted(n for n in os.listdir(BACKUPS_DIR) if RE_SNAPSHOT.match(n))
+    except OSError:
+        return []
+    out = []
+    for n in names:
+        try:
+            st = os.stat(os.path.join(BACKUPS_DIR, n))
+            out.append({'name': n, 'size': st.st_size, 'ts': int(st.st_mtime)})
+        except OSError:
+            pass
+    return out
+
+
+def run_snapshot(keep=None):
+    """Write one snapshot now and prune. Returns (ok, detail)."""
+    os.makedirs(BACKUPS_DIR, exist_ok=True)
+    try:
+        os.chmod(BACKUPS_DIR, 0o700)
+    except OSError:
+        pass
+    name = 'dnsmaq-backup-%s.json' % datetime.now().strftime('%Y%m%d-%H%M%S')
+    try:
+        write_json_atomic(os.path.join(BACKUPS_DIR, name), export_payload(True), 0o600)
+    except Exception as e:
+        with STORE_LOCK:
+            cfg = load_store('backups')
+            cfg.update({'last_run': int(time.time()), 'last_status': 'error: %s' % e})
+            save_store('backups', cfg)
+        return False, str(e)
+    with STORE_LOCK:
+        cfg = load_store('backups')
+        keep = int(keep if keep is not None else cfg.get('keep') or 14)
+        cfg.update({'last_run': int(time.time()), 'last_status': 'ok'})
+        save_store('backups', cfg)
+    for old in _snapshots()[:-keep] if keep > 0 else []:
+        try:
+            os.remove(os.path.join(BACKUPS_DIR, old['name']))
+        except OSError:
+            pass
+    return True, name
+
+
+def tick():
+    """Ticker hook: one snapshot per day once the configured hour has passed."""
+    cfg = load_store('backups')
+    if not cfg.get('enabled'):
+        return
+    now = datetime.now()
+    slot = now.replace(hour=int(cfg.get('hour') or 0) % 24, minute=0, second=0, microsecond=0)
+    if now < slot:
+        return
+    if int(cfg.get('last_run') or 0) >= int(slot.timestamp()):
+        return
+    run_snapshot()
+
+
+def _validate_backups_cfg(data, cur):
+    cfg = dict(cur)
+    if 'enabled' in data:
+        cfg['enabled'] = bool(data['enabled'])
+    for key, lo, hi in (('keep', 1, 365), ('hour', 0, 23)):
+        if key in data:
+            try:
+                n = int(data[key])
+            except (TypeError, ValueError):
+                return None, 'Invalid %s' % key
+            if not lo <= n <= hi:
+                return None, '%s must be %d–%d' % (key, lo, hi)
+            cfg[key] = n
+    return cfg, None
+
+
+@bp.route('/api/backups')
+def backups_list():
+    if not _is_admin():
+        return err('Administrator access required', 403)
+    return jsonify({'success': True, **load_store('backups'), 'dir': BACKUPS_DIR,
+                    'snapshots': _snapshots()[::-1]})
+
+
+@bp.route('/api/backups', methods=['POST'])
+def backups_save():
+    body, e = json_object()
+    if e:
+        return e
+    with STORE_LOCK:
+        cfg, verr = _validate_backups_cfg(body, load_store('backups'))
+        if verr:
+            return err(verr)
+        save_store('backups', cfg)
+    return jsonify({'success': True, **cfg})
+
+
+@bp.route('/api/backups/run', methods=['POST'])
+def backups_run():
+    ok, detail = run_snapshot()
+    if not ok:
+        return err('Snapshot failed: %s' % detail, 500)
+    return jsonify({'success': True, 'name': detail, 'snapshots': _snapshots()[::-1]})
+
+
+def _snapshot_path(name):
+    if not RE_SNAPSHOT.match(name or ''):
+        return None
+    path = os.path.join(BACKUPS_DIR, name)
+    return path if os.path.isfile(path) else None
+
+
+@bp.route('/api/backups/<name>')
+def backups_download(name):
+    if not _is_admin():
+        return err('Administrator access required', 403)
+    path = _snapshot_path(name)
+    if not path:
+        return err('No such snapshot', 404)
+    return send_file(path, mimetype='application/json', as_attachment=True, download_name=name)
+
+
+@bp.route('/api/backups/<name>', methods=['DELETE'])
+def backups_delete(name):
+    path = _snapshot_path(name)
+    if not path:
+        return err('No such snapshot', 404)
+    os.remove(path)
+    return jsonify({'success': True, 'snapshots': _snapshots()[::-1]})
+
+
+@bp.route('/api/backups/<name>/restore', methods=['POST'])
+def backups_restore(name):
+    if not _is_admin():
+        return err('Administrator access required', 403)
+    body, e = json_object()
+    if e:
+        return e
+    path = _snapshot_path(name)
+    if not path:
+        return err('No such snapshot', 404)
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+    except (OSError, ValueError) as ex:
+        return err('Snapshot unreadable: %s' % ex, 500)
+    return restore_payload(payload, bool(body.get('include_accounts')))

@@ -41,6 +41,10 @@ DEFAULTS = {
         # a hand-maintained /etc/hosts is a legitimate source on a box the
         # operator owns.
         'no_hosts': SUPERVISE,
+        # dhcp-script hook: dnsmasq reports every lease add/renew/expiry to
+        # the app over loopback UDP (events.py). Rendered only while DHCP
+        # is enabled and the shipped hook script is present.
+        'lease_events': True,
         'extra_options': '',
         'mirror_accept': False,
         'mirror_token_hash': None,
@@ -54,7 +58,10 @@ DEFAULTS = {
                 'pxe_prompt': '', 'entries': []},
     # Blocklist subscriptions: metadata only — the fetched domains live as
     # one-per-line files under BLOCKLISTS_DIR, keyed by list id.
-    'blocklists': {'serial': 0, 'lists': []},
+    # `allow`: domains exempted from every list (rendered as server=/d/# so
+    # a parent-domain block no longer covers them, and dropped from the
+    # lists themselves).
+    'blocklists': {'serial': 0, 'lists': [], 'allow': []},
     # Encrypted DNS upstream (opt-in): dnsmasq → supervised dnscrypt-proxy on
     # loopback → encrypted hop. mode 'direct' (proxy → resolver, DoH/DNSCrypt)
     # or 'relay' (proxy → anonymizing relay → resolver, DNSCrypt only).
@@ -75,6 +82,11 @@ DEFAULTS = {
     'recon': {'last': None},
     'peers': {'peers': []},
     'stats_cursor': {},
+    # Automatic full-state snapshots under DATA_DIR/backups (backup.py).
+    'backups': {'enabled': False, 'keep': 14, 'hour': 3, 'last_run': 0,
+                'last_status': ''},
+    # IEEE OUI table metadata; the table itself is DATA_DIR/oui.json.
+    'oui': {'fetched': 0, 'count': 0, 'last_status': '', 'auto_refresh': True},
 }
 
 

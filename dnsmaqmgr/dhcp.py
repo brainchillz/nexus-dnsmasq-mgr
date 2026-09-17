@@ -4,7 +4,7 @@ import ipaddress
 from flask import Blueprint, jsonify, request
 
 from .core.config import LEASES_FILE
-from .core.runcmd import err, json_object
+from .core.runcmd import err, json_object, run
 from .core.store import load_store, save_store, new_id, find_record
 from .core.validators import (RE_COMMENT, RE_DHCP_OPTION, RE_HOSTNAME, RE_IFACE,
                               RE_LEASE, RE_MAC, RE_OPT_VALUE, RE_TAG, is_ipv4)
@@ -218,7 +218,48 @@ def dhcp_leases():
     statics = {s['mac'] for s in load_store('dhcp').get('static_leases', [])}
     for l in leases:
         l['static'] = l['mac'] in statics
-    return jsonify({'leases': leases, 'count': len(leases)})
+    from . import oui, events
+    oui.annotate(leases)
+    return jsonify({'leases': leases, 'count': len(leases),
+                    'last_event_ts': events._last_ts})
+
+
+def _iface_for(ip):
+    """The interface dnsmasq serves `ip` on: the single configured listen
+    interface when there is one, else the kernel's route to it."""
+    ifaces = load_store('settings').get('interfaces') or []
+    if len(ifaces) == 1:
+        return ifaces[0]
+    out, _, rc = run(['ip', '-o', 'route', 'get', ip], no_sudo=True, timeout=5)
+    if rc == 0:
+        parts = (out or '').split()
+        if 'dev' in parts:
+            return parts[parts.index('dev') + 1]
+    return None
+
+
+@bp.route('/api/dhcp/leases/release', methods=['POST'])
+def dhcp_release():
+    """Release a live lease: dnsmasq's dhcp_release tool sends the server a
+    DHCPRELEASE on the client's behalf, which drops the lease from the file
+    at once. The client keeps using the address until it renews — this is
+    for reclaiming a pool slot or moving a device onto a new reservation."""
+    body, e = json_object()
+    if e:
+        return e
+    mac = (body.get('mac') or '').strip().lower()
+    ip = (body.get('ip') or '').strip()
+    if not RE_MAC.match(mac) or not is_ipv4(ip):
+        return err('Invalid MAC or IP')
+    if not any(l['mac'].lower() == mac and l['ip'] == ip for l in parse_leases()):
+        return err('No live lease for %s at %s' % (mac, ip), 404)
+    iface = _iface_for(ip)
+    if not iface or not RE_IFACE.match(iface):
+        return err('Could not determine the interface serving %s' % ip, 500)
+    out, e_, rc = run(['dhcp_release', iface, ip, mac], timeout=15)
+    if rc != 0:
+        return err('dhcp_release failed: %s' % ((e_ or out or 'is dnsmasq-utils installed?').strip()), 502)
+    return jsonify({'success': True, 'released': {'mac': mac, 'ip': ip, 'iface': iface}})
 
 
 @bp.route('/api/dhcp/leases/reserve', methods=['POST'])

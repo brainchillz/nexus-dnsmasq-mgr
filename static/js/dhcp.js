@@ -1,5 +1,8 @@
 // DHCP page: ranges, static leases, options, live leases.
 let _dhcpData = null;
+let _dhcpLeases = [];
+let _dhcpLastEvent = 0;
+let _dhcpTimer = null;
 
 const DHCP_OPTION_PRESETS = [
   ['option:router', 'Default gateway (3)'],
@@ -14,12 +17,15 @@ const DHCP_OPTION_PRESETS = [
 
 async function page_dhcp() {
   await refreshMirrorStatus();
-  const [d, st, leases] = await Promise.all([
+  const [d, st, leases, ev] = await Promise.all([
     API.get('/api/dhcp'),
     API.get('/api/dnsmasq/status'),
     API.get('/api/dhcp/leases').catch(() => ({ leases: [] })),
+    API.get('/api/dhcp/events').catch(() => null),
   ]);
   _dhcpData = d;
+  _dhcpLeases = leases.leases || [];
+  _dhcpLastEvent = leases.last_event_ts || 0;
   const locked = sectionLocked('dhcp');
   const can = currentRole === 'admin' && !locked;
 
@@ -35,7 +41,7 @@ async function page_dhcp() {
       <button class="btn btn-sm btn-danger" onclick="dhcpDelete('ranges','${jsArg(r.id)}','${jsArg(r.start)}')">Delete</button>` : ''}
     </td></tr>`).join('');
 
-  const staticRows = d.static_leases.map(s => `<tr>
+  const staticRows = d.static_leases.map(s => `<tr data-row>
     <td><code>${escapeHtml(s.mac)}</code></td>
     <td>${escapeHtml(s.ip)}</td>
     <td>${escapeHtml(s.hostname || '-')}</td>
@@ -56,14 +62,26 @@ async function page_dhcp() {
       <button class="btn btn-sm btn-danger" onclick="dhcpDelete('options','${jsArg(o.id)}','${jsArg(o.option)}')">Delete</button>` : ''}
     </td></tr>`).join('');
 
-  const leaseRows = (leases.leases || []).map(l => `<tr>
+  const leaseRows = (leases.leases || []).map(l => `<tr data-row>
     <td><code>${escapeHtml(l.mac)}</code></td>
     <td>${escapeHtml(l.ip)}</td>
     <td>${escapeHtml(l.hostname || '-')}</td>
+    <td class="help">${escapeHtml(l.vendor || '')}</td>
     <td>${l.expiry ? fmtDur(l.expires_in) : 'infinite'}</td>
     <td>${l.static ? '<span class="status-badge green">static</span>' : '<span class="status-badge gray">dynamic</span>'}</td>
-    <td class="row-actions">${can && !l.static ? `<button class="btn btn-sm" onclick="dhcpReserve('${jsArg(l.mac)}','${jsArg(l.ip)}','${jsArg(l.hostname || '')}')">Reserve</button>` : ''}</td>
+    <td class="row-actions">${can && !l.static ? `<button class="btn btn-sm" onclick="dhcpReserve('${jsArg(l.mac)}','${jsArg(l.ip)}','${jsArg(l.hostname || '')}')">Reserve</button>` : ''}
+      ${can ? `<button class="btn btn-sm btn-outline" title="Send a DHCPRELEASE for this lease (the client keeps the address until it renews)" onclick="dhcpRelease('${jsArg(l.mac)}','${jsArg(l.ip)}')">Release</button>` : ''}</td>
     </tr>`).join('');
+
+  const evRows = ev && ev.events && ev.events.length ? ev.events.slice(0, 12).map(e => `<tr>
+    <td class="help" style="white-space:nowrap">${fmtTs(e.ts)}</td>
+    <td><span class="badge-type">${escapeHtml(e.action === 'old' ? 'renew' : e.action === 'del' ? 'expire' : 'new')}</span></td>
+    <td><code>${escapeHtml(e.mac)}</code></td><td>${escapeHtml(e.ip)}</td>
+    <td>${escapeHtml(e.hostname || '-')}</td><td class="help">${escapeHtml(e.vendor || '')}</td></tr>`).join('') : '';
+  const evNote = !ev ? '' : !ev.enabled ? '<span class="help">lease events are off (Settings → “Report lease events”)</span>'
+    : !ev.listening ? '<span class="status-badge yellow">listener not running</span>'
+    : !ev.active ? '<span class="help">reported live once DHCP is enabled</span>'
+    : `<span class="status-badge green">live</span> <span class="help">dnsmasq reports every lease change to the app on 127.0.0.1:${ev.port}</span>`;
 
   $('page-content').innerHTML = `
     <h2>DHCP</h2>
@@ -76,8 +94,10 @@ async function page_dhcp() {
       <tbody>${rangeRows || '<tr><td colspan="7">No DHCP ranges — add one to serve leases</td></tr>'}</tbody></table>
 
     <h3 style="margin-top:24px">Static Leases</h3>
-    ${can ? `<div class="toolbar"><button class="btn btn-sm" onclick="dhcpStaticModal()">+ Add static lease</button></div>` : ''}
-    <table class="table"><thead><tr><th>MAC</th><th>IP</th><th>Hostname</th><th>Tag</th><th>State</th><th></th></tr></thead>
+    <div class="toolbar">${can ? `<button class="btn btn-sm" onclick="dhcpStaticModal()">+ Add static lease</button>` : ''}
+      <button class="btn btn-sm btn-outline" onclick="dhcpExport('static')">${icon('ul', 'ico-sm')} CSV</button>
+      ${filterBox('dh-static-filter', 'dh-static-table', 'dh-static-count', 'filter MAC / IP / hostname…')}</div>
+    <table class="table" id="dh-static-table"><thead><tr><th>MAC</th><th>IP</th><th>Hostname</th><th>Tag</th><th>State</th><th></th></tr></thead>
       <tbody>${staticRows || '<tr><td colspan="6">No static leases</td></tr>'}</tbody></table>
 
     <h3 style="margin-top:24px">Options</h3>
@@ -86,8 +106,51 @@ async function page_dhcp() {
       <tbody>${optRows || '<tr><td colspan="5">No options — dnsmasq defaults apply (gateway/DNS = this host)</td></tr>'}</tbody></table>
 
     <h3 style="margin-top:24px">Live Leases <span class="help">(${(leases.leases || []).length} active)</span></h3>
-    <table class="table"><thead><tr><th>MAC</th><th>IP</th><th>Hostname</th><th>Expires</th><th>Type</th><th></th></tr></thead>
-      <tbody>${leaseRows || '<tr><td colspan="6">No active leases</td></tr>'}</tbody></table>`;
+    <div class="toolbar">
+      <button class="btn btn-sm btn-outline" onclick="dhcpExport('leases')">${icon('ul', 'ico-sm')} CSV</button>
+      ${filterBox('dh-lease-filter', 'dh-lease-table', 'dh-lease-count', 'filter MAC / IP / hostname / vendor…')}
+      ${evNote}
+    </div>
+    <table class="table" id="dh-lease-table"><thead><tr><th>MAC</th><th>IP</th><th>Hostname</th><th>Vendor</th><th>Expires</th><th>Type</th><th></th></tr></thead>
+      <tbody>${leaseRows || '<tr><td colspan="7">No active leases</td></tr>'}</tbody></table>
+    ${evRows ? `<h3 style="margin-top:24px">Recent lease events</h3>
+    <table class="table"><thead><tr><th>When</th><th>Event</th><th>MAC</th><th>IP</th><th>Hostname</th><th>Vendor</th></tr></thead>
+      <tbody>${evRows}</tbody></table>` : ''}`;
+  tableFilter('dh-static-filter', 'dh-static-table', 'dh-static-count');
+  tableFilter('dh-lease-filter', 'dh-lease-table', 'dh-lease-count');
+  // Re-render when a lease event has arrived since this render (cheap poll of
+  // the leases endpoint; only while the page is open and no modal is up).
+  if (_dhcpTimer) clearInterval(_dhcpTimer);
+  _dhcpTimer = setInterval(async () => {
+    const active = document.querySelector('.nav-list a.active');
+    if (!active || active.dataset.page !== 'dhcp') { clearInterval(_dhcpTimer); _dhcpTimer = null; return; }
+    if ($('modal-overlay').style.display !== 'none') return;
+    if ($('dh-lease-filter') && $('dh-lease-filter').value) return;   // don't yank a filtered view
+    try {
+      const r = await API.get('/api/dhcp/leases');
+      if ((r.last_event_ts || 0) !== _dhcpLastEvent || (r.count || 0) !== _dhcpLeases.length) page_dhcp();
+    } catch (e) {}
+  }, 5000);
+}
+
+function dhcpExport(kind) {
+  const stamp = new Date().toISOString().slice(0, 10);
+  if (kind === 'static') {
+    downloadCsv(`dnsmaq-static-leases-${stamp}.csv`, ['mac', 'ip', 'hostname', 'tag', 'enabled', 'comment', 'id'],
+      (_dhcpData.static_leases || []).map(s => [s.mac, s.ip, s.hostname || '', s.tag || '', s.enabled === false ? 'no' : 'yes', s.comment || '', s.id]));
+    return;
+  }
+  downloadCsv(`dnsmaq-leases-${stamp}.csv`, ['mac', 'ip', 'hostname', 'vendor', 'expires_at', 'static', 'client_id'],
+    _dhcpLeases.map(l => [l.mac, l.ip, l.hostname || '', l.vendor || '',
+      l.expiry ? new Date(l.expiry * 1000).toISOString() : 'infinite', l.static ? 'yes' : 'no', l.client_id || '']));
+}
+
+async function dhcpRelease(mac, ip) {
+  if (!confirm(`Release the lease for ${mac} at ${ip}?\n\nThe pool slot is freed now; the device keeps using the address until it renews.`)) return;
+  try {
+    await API.post('/api/dhcp/leases/release', { mac, ip });
+    page_dhcp();
+  } catch (e) { alert(e.message); }
 }
 
 function _drec(coll, id) { return (_dhcpData[coll] || []).find(r => r.id === id) || {}; }

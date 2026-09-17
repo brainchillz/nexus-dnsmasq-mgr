@@ -100,11 +100,51 @@ def _check_new_devices(state, leases, statics):
         mac = l.get('mac')
         if mac and mac not in known and mac not in statics:
             found.append(('new_device:%s' % mac, 'new_device',
-                          'New device on LAN',
-                          '%s took lease %s%s' % (mac, l.get('ip', '?'),
-                                                  (' (%s)' % l['hostname']) if l.get('hostname') else '')))
+                          'New device on LAN', _new_device_message(l)))
     state['known_macs'] = sorted(known | current | statics)
     return found
+
+
+def _new_device_message(l):
+    from . import oui
+    who = oui.vendor(l.get('mac', ''))
+    return '%s%s took lease %s%s' % (l.get('mac'), (' [%s]' % who) if who else '',
+                                     l.get('ip', '?'),
+                                     (' (%s)' % l['hostname']) if l.get('hostname') else '')
+
+
+def lease_event(ev):
+    """Real-time path (events.py): a lease was just added. Fire the
+    new-device alert NOW instead of on the next tick, with the same baseline,
+    static-lease and cooldown rules the tick applies. Returns True if sent."""
+    cfg = load_store('alerts')
+    if not cfg.get('enabled') or not cfg.get('webhook_url'):
+        return False
+    if not (cfg.get('events') or {}).get('new_device', True):
+        return False
+    mac = ev.get('mac')
+    with STORE_LOCK:
+        state = load_store('alerts_state')
+        statics = {s['mac'] for s in load_store('dhcp').get('static_leases', [])}
+        if not state.get('baseline_done') or mac in statics or mac in set(state.get('known_macs', [])):
+            return False
+        key = 'new_device:%s' % mac
+        now = int(time.time())
+        if now - int(state.get('last_sent', {}).get(key, 0)) < _cooldown(key):
+            return False
+        state['known_macs'] = sorted(set(state.get('known_macs', [])) | {mac})
+        save_store('alerts_state', state)
+    title, message = 'New device on LAN', _new_device_message(ev)
+    ok, detail = deliver(cfg, 'new_device', title, message)
+    with STORE_LOCK:
+        state = load_store('alerts_state')
+        state.setdefault('last_sent', {})[key] = now
+        state.setdefault('recent', []).append(
+            {'ts': now, 'event': 'new_device', 'title': title, 'message': message,
+             'delivered': ok, 'detail': detail})
+        state['recent'] = state['recent'][-RECENT_KEEP:]
+        save_store('alerts_state', state)
+    return ok
 
 
 def _check_pools(cfg, state, leases):
