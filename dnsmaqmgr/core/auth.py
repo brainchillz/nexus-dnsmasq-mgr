@@ -26,14 +26,14 @@ from datetime import datetime
 from flask import Blueprint, jsonify, request, session, g
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from .config import DATA_DIR, APP_VERSION, write_json_atomic
+from .config import DATA_DIR, APP_VERSION, TRUSTED_PROXIES, write_json_atomic
 from . import sso
-from .runcmd import err
+from .runcmd import err, json_object
 
 bp = Blueprint('auth', __name__)
 
 AUTH_FILE = os.environ.get('DNSMAQ_AUTH_FILE', os.path.join(DATA_DIR, 'auth.json'))
-RE_USERNAME = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.-]*$')
+RE_USERNAME = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.-]*\Z')
 MIN_PASSWORD_LEN = 8
 
 # Compared against when a username is unknown, so a missing user costs the
@@ -52,6 +52,12 @@ PUBLIC_ENDPOINTS = {'api_login', 'api_me', 'index', 'static', 'mirror_receive', 
 
 # Mutating endpoints a non-admin (read-only) account is still allowed to call.
 RBAC_EXEMPT = {'api_logout', 'change_password'}
+
+# What a SESSION whose account still carries the first-run `must_change` flag
+# may reach until the password is changed. Enforced server-side so the forced
+# dialog in the browser is not the only thing standing in the way. Token
+# identities have no such flag and are never affected.
+MUST_CHANGE_ALLOWED = {'change_password', 'api_logout', 'api_me', 'api_version'}
 
 TOKEN_PREFIX = 'dm_'
 
@@ -88,6 +94,20 @@ def _count_admins(users):
 def _is_admin():
     # Identity (session user or API token) is resolved in require_login.
     return getattr(g, 'identity_role', None) == 'admin'
+
+
+def _client_ip():
+    """The address login throttling keys on. Behind a reverse proxy every
+    client shares the proxy's address, so X-Forwarded-For is honoured — but
+    ONLY when the immediate peer is a configured trusted proxy, otherwise
+    the header is attacker-controlled and would let anyone dodge (or
+    trigger) the lockout at will."""
+    ip = request.remote_addr or '?'
+    if TRUSTED_PROXIES and ip in TRUSTED_PROXIES:
+        fwd = (request.headers.get('X-Forwarded-For') or '').split(',')[0].strip()
+        if fwd:
+            return fwd
+    return ip
 
 
 # ─── API tokens (for automation; bearer auth, no session cookie) ───────
@@ -194,6 +214,12 @@ def require_login():
         return jsonify({'success': False, 'error': 'Authentication required'}), 401
     g.identity_name = name
     g.identity_role = role
+    if session.get('user') == name and \
+            _bare_endpoint(request.endpoint) not in MUST_CHANGE_ALLOWED:
+        rec = _users().get(name)
+        if isinstance(rec, dict) and rec.get('must_change'):
+            return jsonify({'success': False, 'must_change': True,
+                            'error': 'Password change required before continuing'}), 403
     # Role check: read-only identities may view (GET) but not change anything.
     if request.method in ('POST', 'PUT', 'DELETE', 'PATCH') and \
             _bare_endpoint(request.endpoint) not in RBAC_EXEMPT:
@@ -209,7 +235,7 @@ def api_login():
     data = request.get_json(silent=True) or {}
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
-    ip = request.remote_addr or '?'
+    ip = _client_ip()
 
     cnt, first = _LOGIN_FAILS.get(ip, (0, 0))
     now = time.time()
@@ -365,7 +391,9 @@ def api_version():
 
 @bp.route('/api/account/password', methods=['POST'])
 def change_password():
-    data = request.get_json() or {}
+    data, e = json_object()
+    if e:
+        return e
     old = data.get('old_password') or ''
     new = data.get('new_password') or ''
     user = session.get('user')  # session-only; not applicable to API tokens
@@ -399,7 +427,9 @@ def users_list():
 def users_create():
     if not _is_admin():
         return err('Administrator access required', 403)
-    data = request.get_json() or {}
+    data, e = json_object()
+    if e:
+        return e
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
     role = data.get('role', 'readonly')
@@ -407,9 +437,14 @@ def users_create():
         return err('Invalid username')
     if role not in ('admin', 'readonly'):
         return err('Invalid role')
-    if not password:
-        return err('Password required')
+    if len(password) < MIN_PASSWORD_LEN:
+        return err(f'Password must be at least {MIN_PASSWORD_LEN} characters')
     cfg = load_config()
+    if username in cfg.get('users', {}):
+        # Creating over an existing name would silently replace its password
+        # AND role — including demoting the last administrator around the
+        # guard in users_set_role. Edits go through the per-user routes.
+        return err('User already exists', 409)
     cfg.setdefault('users', {})[username] = {'password': generate_password_hash(password),
                                              'role': role}
     save_config(cfg)
@@ -420,7 +455,10 @@ def users_create():
 def users_set_role(username):
     if not _is_admin():
         return err('Administrator access required', 403)
-    role = (request.get_json() or {}).get('role')
+    data, e = json_object()
+    if e:
+        return e
+    role = data.get('role')
     if role not in ('admin', 'readonly'):
         return err('Invalid role')
     cfg = load_config()
@@ -440,9 +478,12 @@ def users_set_role(username):
 def users_set_password(username):
     if not _is_admin():
         return err('Administrator access required', 403)
-    password = (request.get_json() or {}).get('password') or ''
-    if not password:
-        return err('Password required')
+    data, e = json_object()
+    if e:
+        return e
+    password = data.get('password') or ''
+    if len(password) < MIN_PASSWORD_LEN:
+        return err(f'Password must be at least {MIN_PASSWORD_LEN} characters')
     cfg = load_config()
     users = cfg.get('users', {})
     if username not in users:
@@ -486,7 +527,9 @@ def tokens_list():
 def tokens_create():
     if not _is_admin():
         return err('Administrator access required', 403)
-    data = request.get_json() or {}
+    data, e = json_object()
+    if e:
+        return e
     name = (data.get('name') or '').strip()
     role = data.get('role', 'readonly')
     if not RE_USERNAME.match(name):

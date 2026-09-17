@@ -1,12 +1,20 @@
 #!/bin/bash
 # DNSMAQ-MGR bare-metal installer (Debian/Ubuntu).
-# Installs to /opt/dnsmaq-mgr, runs as the dnsmaqmgr system user, drives the
-# distro dnsmasq unit through argument-pinned sudoers rules, and points
-# dnsmasq at the app's rendered config via a /etc/dnsmasq.d drop-in.
+# Code goes to /opt/dnsmaq-mgr (root-owned, read-only to the service), mutable
+# state to /var/lib/dnsmaq-mgr (owned by the dnsmaqmgr system user). The app
+# drives the distro dnsmasq unit through argument-pinned sudoers rules and
+# points dnsmasq at the rendered config via a /etc/dnsmasq.d drop-in.
+#
+# The split matters: the sudoers rules run the interpreter and app.py as
+# ROOT. If the service user could write anywhere on that path — including the
+# directory holding app.py, which is enough to rename it away — any write-as-
+# app-user primitive would be root. Earlier installs kept state inside
+# /opt/dnsmaq-mgr and therefore had to leave it writable; those are migrated.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="/opt/dnsmaq-mgr"
+DATA_DIR="/var/lib/dnsmaq-mgr"
 APP_USER="dnsmaqmgr"
 WEB_PORT="${DNSMAQ_PORT:-8443}"
 TAKE_53=0
@@ -52,6 +60,10 @@ if ! id -u $APP_USER &>/dev/null; then
     useradd -r -s /usr/sbin/nologin -M -d $APP_DIR $APP_USER
 fi
 
+# Stop the service while code and state move underneath it (no-op on a
+# first install).
+systemctl stop dnsmaq-mgr 2>/dev/null || true
+
 info "Deploying application to $APP_DIR ..."
 mkdir -p $APP_DIR
 cp -r "$SCRIPT_DIR"/app.py "$SCRIPT_DIR"/dnsmaqmgr "$SCRIPT_DIR"/templates \
@@ -64,28 +76,43 @@ if [ ! -d $APP_DIR/venv ]; then
 fi
 $APP_DIR/venv/bin/pip install -q -r $APP_DIR/requirements.txt
 
+# Migrate state left inside $APP_DIR by releases before 0.4.6. Everything
+# mutable moves as-is (accounts, mirror token + locks, certs — so the TLS
+# fingerprint peers/IPAM pinned does not change — leases, history, lists).
+if [ ! -e $DATA_DIR/auth.json ] && [ -e $APP_DIR/auth.json ]; then
+    info "Migrating state from $APP_DIR to $DATA_DIR ..."
+    mkdir -p $DATA_DIR
+    for item in auth.json sso.json history.db history.db-wal history.db-shm \
+                state certs render leases blocklists changelog encdns; do
+        [ -e "$APP_DIR/$item" ] && mv "$APP_DIR/$item" "$DATA_DIR/$item"
+    done
+fi
+
 info "Preparing data directories..."
-mkdir -p $APP_DIR/state $APP_DIR/certs $APP_DIR/leases $APP_DIR/encdns \
-         $APP_DIR/render/dnsmasq.d $APP_DIR/render/hosts.d
-chown -R $APP_USER:$APP_USER $APP_DIR
-# The interpreter, entrypoint and package that the sudoers rules run as ROOT
-# must not be writable by the service user — otherwise any write-as-app-user
-# primitive becomes root. Re-own the code paths (only the data dirs below stay
-# app-user-owned and writable).
-chown -R root:root $APP_DIR/venv $APP_DIR/app.py $APP_DIR/dnsmaqmgr \
-                   $APP_DIR/static $APP_DIR/templates
-# dnsmasq (root at startup, 'nobody'/'dnsmasq' after priv-drop) must be able to
-# read the rendered config and hosts trees.
-chmod 755 $APP_DIR $APP_DIR/render $APP_DIR/render/dnsmasq.d \
-          $APP_DIR/render/hosts.d $APP_DIR/leases
-chmod 700 $APP_DIR/state $APP_DIR/certs $APP_DIR/encdns
+mkdir -p $DATA_DIR/state $DATA_DIR/certs $DATA_DIR/leases $DATA_DIR/encdns \
+         $DATA_DIR/blocklists $DATA_DIR/changelog \
+         $DATA_DIR/render/dnsmasq.d $DATA_DIR/render/hosts.d
+chown -R $APP_USER:$APP_USER $DATA_DIR
+# dnsmasq (root at startup, 'nobody'/'dnsmasq' after priv-drop) must be able
+# to read the rendered config, hosts and leases trees.
+chmod 755 $DATA_DIR $DATA_DIR/render $DATA_DIR/render/dnsmasq.d \
+          $DATA_DIR/render/hosts.d $DATA_DIR/leases
+chmod 700 $DATA_DIR/state $DATA_DIR/certs $DATA_DIR/encdns \
+          $DATA_DIR/blocklists $DATA_DIR/changelog
+
+# Code tree: root-owned and read-only to the service user, INCLUDING the
+# directory itself (a writable directory lets its entries be renamed away).
+chown -R root:root $APP_DIR
+chmod 755 $APP_DIR
 
 info "Writing sudoers rules (argument-pinned)..."
 SYSTEMCTL="$(command -v systemctl)"
 JOURNALCTL="$(command -v journalctl)"
 cat > /etc/sudoers.d/dnsmaq-mgr <<EOF
 # DNSMAQ-MGR: exactly the dnsmasq service actions the web app needs — nothing else.
-$APP_USER ALL=(ALL) NOPASSWD: $SYSTEMCTL start dnsmasq, $SYSTEMCTL stop dnsmasq, $SYSTEMCTL restart dnsmasq, $SYSTEMCTL kill -s HUP dnsmasq, $SYSTEMCTL is-active dnsmasq, $SYSTEMCTL status dnsmasq
+# No 'systemctl status': the app never calls it, and from a tty it would
+# spawn a root pager.
+$APP_USER ALL=(ALL) NOPASSWD: $SYSTEMCTL start dnsmasq, $SYSTEMCTL stop dnsmasq, $SYSTEMCTL restart dnsmasq, $SYSTEMCTL kill -s HUP dnsmasq, $SYSTEMCTL is-active dnsmasq
 # Exact argv the app uses — NOT a trailing wildcard: '$JOURNALCTL -u dnsmasq *'
 # would let the service user pass '-e' and drop into a root pager (\`!sh\`).
 $APP_USER ALL=(ALL) NOPASSWD: $JOURNALCTL -u dnsmasq -n 200 --no-pager
@@ -98,13 +125,13 @@ chmod 440 /etc/sudoers.d/dnsmaq-mgr
 visudo -cf /etc/sudoers.d/dnsmaq-mgr >/dev/null
 
 info "Rendering initial dnsmasq config..."
-sudo -u $APP_USER DNSMAQ_DATA_DIR=$APP_DIR $APP_DIR/venv/bin/python $APP_DIR/app.py render
+sudo -u $APP_USER DNSMAQ_DATA_DIR=$DATA_DIR $APP_DIR/venv/bin/python $APP_DIR/app.py render
 
 info "Pointing dnsmasq at the managed config..."
 mkdir -p /etc/dnsmasq.d
 cat > /etc/dnsmasq.d/zz-dnsmaq-mgr.conf <<EOF
 # Managed by DNSMAQ-MGR — pulls in the app-rendered configuration.
-conf-dir=$APP_DIR/render/dnsmasq.d,*.conf
+conf-dir=$DATA_DIR/render/dnsmasq.d,*.conf
 EOF
 
 # Warn about pre-existing config that could fight with the managed files.
@@ -147,7 +174,7 @@ Type=simple
 User=$APP_USER
 Group=$APP_USER
 WorkingDirectory=$APP_DIR
-Environment=DNSMAQ_DATA_DIR=$APP_DIR
+Environment=DNSMAQ_DATA_DIR=$DATA_DIR
 Environment=DNSMAQ_PORT=$WEB_PORT
 ExecStart=$APP_DIR/venv/bin/python $APP_DIR/app.py
 Restart=on-failure
@@ -168,7 +195,7 @@ if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then
     ufw allow $WEB_PORT/tcp >/dev/null
     warn "DNS/DHCP ports (53, 67/udp) were NOT opened automatically —"
     warn "open them for your LAN once you enable those features:"
-    warn "  ufw allow from <lan-subnet> to any port 53; ufw allow 67/udp; ufw allow 69/udp"
+    warn "  ufw allow from <lan-subnet> to any port 53; ufw allow 67/udp"
 fi
 
 sleep 2
@@ -176,4 +203,5 @@ echo ""
 info "Done. Web UI: https://$(hostname -I | awk '{print $1}'):$WEB_PORT"
 info "First-run admin credentials were printed by the service on first start:"
 info "  journalctl -u dnsmaq-mgr | grep -A3 'initial admin'"
-info "Or set one now:  sudo -u $APP_USER DNSMAQ_DATA_DIR=$APP_DIR $APP_DIR/venv/bin/python $APP_DIR/app.py set-password admin"
+info "Or set one now:  sudo -u $APP_USER DNSMAQ_DATA_DIR=$DATA_DIR $APP_DIR/venv/bin/python $APP_DIR/app.py set-password admin"
+info "State lives in $DATA_DIR; the code in $APP_DIR is root-owned and read-only to the service."

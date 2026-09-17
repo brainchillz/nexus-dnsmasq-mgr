@@ -135,6 +135,15 @@ def _staged_settings(src):
     if not isinstance(sources, dict):
         raise ValueError('settings: invalid mirror sources')
     out['mirror_sources'] = sources
+    # An established mirror TARGET keeps its own token, accept flag and
+    # source locks: a source (IPAM, a primary) holds the matching token and
+    # serials, and a restore must not swap them from under it. A node with
+    # no token yet is a fresh migration target and takes the backup's.
+    from .mirror import MIRROR_KEYS
+    cur = load_store('settings')
+    if cur.get('mirror_token_hash'):
+        for k in MIRROR_KEYS:
+            out[k] = cur.get(k)
     return out
 
 
@@ -253,6 +262,12 @@ def backup_restore():
     # alerts is outside apply_change's rollback snapshot — write it only after
     # the apply holds, alongside peers/accounts.
     staged_alerts = staged.pop('alerts', None)
+
+    # Stores a mirror source owns are the source's to write, not a backup's.
+    from .mirror import locked_store_error
+    locked = locked_store_error(set(staged))
+    if locked:
+        return locked
 
     def mutate():
         for name, data in staged.items():

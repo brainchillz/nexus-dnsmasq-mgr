@@ -169,6 +169,12 @@ def changelog_rollback(cid):
 
     from .core.store import load_store, save_store
     from .dnsmasq import apply_change   # lazy: dnsmasq imports this module
+    from .mirror import locked_store_error, MIRROR_KEYS
+
+    # A mirrored section is the source's to change, not history's.
+    locked = locked_store_error([n for n in TRACKED if n in stores])
+    if locked:
+        return locked
 
     def mutate():
         for name in TRACKED:
@@ -180,6 +186,11 @@ def changelog_rollback(cid):
             cur = load_store(name)
             data['serial'] = max(int(cur.get('serial', 0)),
                                  int(data.get('serial', 0)))
+            if name == 'settings':
+                # This node's mirror token, accept flag and source locks are
+                # not configuration history — keep the live values.
+                for k in MIRROR_KEYS:
+                    data[k] = cur.get(k)
             save_store(name, data)
 
     res = apply_change(mutate, sections=['hosts', 'dns', 'dhcp', 'netboot'])

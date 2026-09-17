@@ -25,6 +25,18 @@ bp = Blueprint('mirror', __name__)
 MIRROR_TOKEN_PREFIX = 'dmm_'
 SECTIONS = ('hosts', 'dns', 'dhcp', 'netboot')
 
+# Which stores a mirrored section writes into. Used by rollback/restore to
+# refuse overwriting data a mirror source owns ('dns' also carries the
+# upstreams, which live in settings).
+SECTION_STORES = {'hosts': ('dns',), 'dns': ('dns', 'settings'),
+                  'dhcp': ('dhcp',), 'netboot': ('netboot',)}
+
+# Settings keys that describe THIS node's relationship with its mirror
+# sources. Never part of a rollback/restore payload: reverting them would
+# swap the mirror token from under the source, clear the locks, or hand the
+# source stale serials.
+MIRROR_KEYS = ('mirror_token_hash', 'mirror_accept', 'mirror_sources')
+
 
 def locked_sections():
     """Sections currently managed by a mirror source (read-only here)."""
@@ -42,6 +54,23 @@ def locked_error(section):
         if section in src.get('sections', []):
             return err("Section '%s' is mirrored from '%s' and read-only on this node "
                        "(detach it on the Mirroring page to edit locally)" % (section, name), 409)
+    return None
+
+
+def locked_store_error(stores):
+    """err() response if writing any of `stores` wholesale would clobber a
+    section a mirror source owns, else None. Rollback and restore call this:
+    on a node fed by an IPAM or primary, the source only re-pushes when ITS
+    content changes, so a silent local revert would stay in place unnoticed."""
+    sources = load_store('settings').get('mirror_sources', {})
+    for name, src in sources.items():
+        owned = set()
+        for sec in src.get('sections', []):
+            owned.update(SECTION_STORES.get(sec, ()))
+        hit = sorted(owned & set(stores))
+        if hit:
+            return err("Store(s) %s are mirrored from '%s' and read-only on this node "
+                       "(detach it on the Mirroring page first)" % (', '.join(hit), name), 409)
     return None
 
 

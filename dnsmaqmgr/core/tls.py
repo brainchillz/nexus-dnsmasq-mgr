@@ -7,7 +7,8 @@ import socket
 from flask import Blueprint, jsonify, request
 
 from .config import TLS_CERT, TLS_KEY, TLS_ENABLED
-from .runcmd import run, err
+from .runcmd import run, err, json_object
+from .validators import valid_hostname_fqdn
 
 bp = Blueprint('tls', __name__)
 
@@ -16,15 +17,40 @@ def _openssl(args, input_data=None):
     return run(['openssl', *args], input_data=input_data, no_sudo=True)
 
 
+def _san():
+    """subjectAltName for the self-signed cert: hostname, FQDN, localhost and
+    the primary + loopback addresses. Browsers ignore the CN, so without a
+    SAN even a trusted self-signed cert is rejected for the hostname."""
+    names = {'localhost'}
+    for n in (socket.gethostname(), socket.getfqdn()):
+        n = (n or '').strip().rstrip('.')
+        if n and valid_hostname_fqdn(n):
+            names.add(n.lower())
+    ips = {'127.0.0.1'}
+    try:
+        # A connected UDP socket picks the default-route source address
+        # without sending anything.
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+            sk.connect(('192.0.2.1', 9))
+            ips.add(sk.getsockname()[0])
+    except OSError:
+        pass
+    return ','.join(['DNS:%s' % n for n in sorted(names)] +
+                    ['IP:%s' % i for i in sorted(ips)])
+
+
 def generate_self_signed(cert_path=TLS_CERT, key_path=TLS_KEY):
     os.makedirs(os.path.dirname(cert_path), exist_ok=True)
     os.makedirs(os.path.dirname(key_path), exist_ok=True)
     cn = socket.gethostname() or 'dnsmaq-mgr'
-    _, e, rc = _openssl([
-        'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-        '-keyout', key_path, '-out', cert_path,
-        '-days', '3650', '-subj', f'/CN={cn}',
-    ])
+    base = ['req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+            '-keyout', key_path, '-out', cert_path,
+            '-days', '3650', '-subj', f'/CN={cn}']
+    _, e, rc = _openssl(base + ['-addext', 'subjectAltName=%s' % _san()])
+    if rc != 0:
+        # -addext needs OpenSSL 1.1.1+; fall back to a CN-only cert rather
+        # than refusing to start.
+        _, e, rc = _openssl(base)
     if rc == 0:
         try:
             os.chmod(key_path, 0o600)
@@ -81,7 +107,9 @@ def tls_regenerate():
 
 @bp.route('/api/tls/cert', methods=['POST'])
 def tls_upload_cert():
-    data = request.get_json() or {}
+    data, e = json_object()
+    if e:
+        return e
     cert_pem = (data.get('cert') or '').strip()
     key_pem = (data.get('key') or '').strip()
     if 'BEGIN CERTIFICATE' not in cert_pem:

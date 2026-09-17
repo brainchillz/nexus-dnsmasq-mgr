@@ -24,7 +24,7 @@ import urllib.parse
 from flask import Blueprint, jsonify, request
 
 from . import unifi
-from .core.runcmd import err
+from .core.runcmd import err, json_object
 from .core.store import STORE_LOCK, load_store, save_store, new_id
 from .core.validators import RE_FINGERPRINT, RE_SOURCE, RE_URL
 from .mirror import SECTIONS
@@ -271,39 +271,48 @@ def peers_list():
 
 @bp.route('/api/peers', methods=['POST'])
 def peers_add():
-    rec, e = _validate_peer(request.get_json() or {})
+    body, e = json_object()
+    if e:
+        return e
+    rec, e = _validate_peer(body)
     if e:
         return err(e)
     rec['id'] = new_id('p')
-    cfg = load_store('peers')
-    cfg['peers'].append(rec)
-    save_store('peers', cfg)
+    with STORE_LOCK:      # push_to_peer rewrites this store from a thread
+        cfg = load_store('peers')
+        cfg['peers'].append(rec)
+        save_store('peers', cfg)
     return jsonify({'success': True, 'id': rec['id']})
 
 
 @bp.route('/api/peers/<pid>', methods=['POST'])
 def peers_update(pid):
-    cfg = load_store('peers')
-    existing = next((p for p in cfg['peers'] if p['id'] == pid), None)
-    if not existing:
-        return err('No such peer', 404)
-    rec, e = _validate_peer(request.get_json() or {}, existing=existing)
+    body, e = json_object()
     if e:
-        return err(e)
-    rec['id'] = pid
-    cfg['peers'] = [rec if p['id'] == pid else p for p in cfg['peers']]
-    save_store('peers', cfg)
+        return e
+    with STORE_LOCK:
+        cfg = load_store('peers')
+        existing = next((p for p in cfg['peers'] if p['id'] == pid), None)
+        if not existing:
+            return err('No such peer', 404)
+        rec, e = _validate_peer(body, existing=existing)
+        if e:
+            return err(e)
+        rec['id'] = pid
+        cfg['peers'] = [rec if p['id'] == pid else p for p in cfg['peers']]
+        save_store('peers', cfg)
     return jsonify({'success': True})
 
 
 @bp.route('/api/peers/<pid>', methods=['DELETE'])
 def peers_delete(pid):
-    cfg = load_store('peers')
-    before = len(cfg['peers'])
-    cfg['peers'] = [p for p in cfg['peers'] if p['id'] != pid]
-    if len(cfg['peers']) == before:
-        return err('No such peer', 404)
-    save_store('peers', cfg)
+    with STORE_LOCK:
+        cfg = load_store('peers')
+        before = len(cfg['peers'])
+        cfg['peers'] = [p for p in cfg['peers'] if p['id'] != pid]
+        if len(cfg['peers']) == before:
+            return err('No such peer', 404)
+        save_store('peers', cfg)
     return jsonify({'success': True})
 
 
@@ -321,7 +330,9 @@ def peers_sync(pid):
 @bp.route('/api/peers/fetch-fingerprint', methods=['POST'])
 def peers_fetch_fingerprint():
     """Fetch a candidate cert fingerprint so the UI can offer 'pin this cert'."""
-    data = request.get_json() or {}
+    data, e = json_object()
+    if e:
+        return e
     url = (data.get('url') or '').strip().rstrip('/')
     kind = (data.get('kind') or 'dnsmaq').strip()
     if not RE_URL.match(url):

@@ -70,6 +70,11 @@ def dispatch(argv):
     import inspect
     if len(argv) > 1 and argv[1] in COMMANDS:
         fn = COMMANDS[argv[1]]
+        if argv[1] != 'dhcp-probe':
+            # The probe runs privileged (sudo, env stripped) and must never
+            # touch the data tree; every other command wants it in place.
+            from .core.config import ensure_dirs
+            ensure_dirs()
         if len(inspect.signature(fn).parameters) >= 1:
             rc = fn(argv)
         else:

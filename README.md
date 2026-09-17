@@ -161,9 +161,9 @@ pinning, last-sync status — works the same.
 - Only the **hosts** section applies. UniFi has no analogue for DHCP or
   netboot, and cannot receive or lock sections, so a gateway peer is
   push-only and the other sections are hidden.
-- **Full mirror** (default, per-peer): Static DNS entries that aren't in our
-  host records are deleted. A push with zero host records is refused rather
-  than wiping the gateway.
+- **Full mirror** (per-peer, off by default): Static DNS entries that aren't
+  in our host records are deleted. A push with zero host records is refused
+  rather than wiping the gateway.
 - **Device Local DNS.** UniFi also keeps a per-client "Local DNS Record" on
   fixed-IP clients, which shadows Static DNS — creating a static entry for
   such a name is rejected outright. Those names are reported as conflicts in
@@ -182,7 +182,10 @@ pinning, last-sync status — works the same.
 - **Rendered-config diffs** between any change and its predecessor, and
   **one-click rollback** to any recorded point — re-applied through the same
   `dnsmasq --test`-gated pipeline and itself recorded. Serials always move
-  forward so mirrors never see a "stale" rollback. Last 50 changes kept
+  forward so mirrors never see a "stale" rollback; this node's mirror token,
+  accept flag and source locks are never part of what rolls back, and a
+  section a mirror source owns is refused (detach first) rather than
+  silently reverted under the source. Last 50 changes kept
   (`DNSMAQ_CHANGELOG_KEEP`).
 
 ### Alerts / webhooks
@@ -221,7 +224,8 @@ pinning, last-sync status — works the same.
   boot**; upload your own cert/key (validated: PEM parse + key/cert match) or
   regenerate the self-signed pair **from the Settings page**.
 - Session login with forced password change of the generated first-run admin
-  password; PBKDF2 hashes; per-IP login throttling.
+  password (enforced server-side, not just by the dialog); PBKDF2 hashes;
+  per-IP login throttling (proxy-aware via `DNSMAQ_TRUSTED_PROXY`).
 - **Roles**: admin and read-only (read-only accounts can view everything,
   change nothing — enforced server-side by HTTP method).
 - **API tokens** for automation (`Authorization: Bearer dm_…`), admin or
@@ -243,14 +247,19 @@ sudo ./install.sh              # add --take-port-53 to also disable systemd-reso
 What the installer does:
 
 1. Installs `dnsmasq`, `python3-venv`, `openssl` if missing.
-2. Creates the unprivileged `dnsmaqmgr` system user and deploys the app to
-   `/opt/dnsmaq-mgr` with a virtualenv.
+2. Creates the unprivileged `dnsmaqmgr` system user, deploys the code to
+   `/opt/dnsmaq-mgr` (root-owned, read-only to the service — the sudoers
+   rules run files from it as root) with a virtualenv, and keeps all
+   mutable state in `/var/lib/dnsmaq-mgr` (`DNSMAQ_DATA_DIR`). Installs
+   older than 0.4.6 kept state inside `/opt/dnsmaq-mgr`; the installer
+   migrates it in place, certificates included, so pinned fingerprints and
+   mirror tokens survive.
 3. Writes `/etc/sudoers.d/dnsmaq-mgr` with **argument-pinned** rules — the
-   app can run `systemctl start|stop|restart|kill -s HUP|is-active|status
+   app can run `systemctl start|stop|restart|kill -s HUP|is-active
    dnsmasq`, `journalctl -u dnsmasq`, and the DHCP probe. Nothing else.
 4. Renders an initial safe config (DNS on with sane defaults, DHCP off) and
    points dnsmasq at it via a one-line drop-in
-   `/etc/dnsmasq.d/zz-dnsmaq-mgr.conf` (`conf-dir=/opt/dnsmaq-mgr/render/dnsmasq.d`).
+   `/etc/dnsmasq.d/zz-dnsmaq-mgr.conf` (`conf-dir=/var/lib/dnsmaq-mgr/render/dnsmasq.d`).
    Your existing `/etc/dnsmasq.conf` is left alone; the installer warns if it
    spots options that would conflict.
 5. Handles the Ubuntu **systemd-resolved** port-53 question: interactively
@@ -262,7 +271,7 @@ What the installer does:
 Then browse to `https://<host>:8443`. The first-run admin password is printed
 to the journal (`journalctl -u dnsmaq-mgr | grep -A3 'initial admin'`) and
 must be changed at first login. Alternatively:
-`sudo -u dnsmaqmgr DNSMAQ_DATA_DIR=/opt/dnsmaq-mgr /opt/dnsmaq-mgr/venv/bin/python /opt/dnsmaq-mgr/app.py set-password admin`
+`sudo -u dnsmaqmgr DNSMAQ_DATA_DIR=/var/lib/dnsmaq-mgr /opt/dnsmaq-mgr/venv/bin/python /opt/dnsmaq-mgr/app.py set-password admin`
 
 ## Install — Docker
 
@@ -452,7 +461,7 @@ Peer record: `{name, url, kind: "dnsmaq"|"unifi", sections:
 
 - `dnsmaq` — `token`
 - `unifi` — `unifi_username`, `unifi_password`, `unifi_site`,
-  `unifi_delete_extra` (full mirror, default true), `unifi_claim_client_dns`
+  `unifi_delete_extra` (full mirror, default false), `unifi_claim_client_dns`
   (take over names held by a client's Local DNS Record, default false).
   Sections must be `["hosts"]`.
 
@@ -476,7 +485,9 @@ Environment variables (all optional):
 | `DNSMAQ_PORT` | `8443` | web UI port |
 | `DNSMAQ_TLS` | `1` | HTTPS (0 = plain HTTP behind a reverse proxy) |
 | `DNSMAQ_TLS_CERT` / `_KEY` / `_DIR` | `<data>/certs/…` | certificate paths |
-| `DNSMAQ_DATA_DIR` | app dir | root for state/certs/render/leases/history |
+| `DNSMAQ_DATA_DIR` | app dir (installer: `/var/lib/dnsmaq-mgr`, Docker: `/data`) | root for state/certs/render/leases/history |
+| `DNSMAQ_COOKIE_SECURE` | `= DNSMAQ_TLS` | `Secure` flag on the session cookie; set to 1 behind a TLS-terminating proxy with `DNSMAQ_TLS=0` |
+| `DNSMAQ_TRUSTED_PROXY` | unset | comma-separated proxy addresses whose `X-Forwarded-For` the login throttle trusts |
 | `DNSMAQ_SUPERVISE` | `0` | app supervises a dnsmasq child (Docker mode) |
 | `DNSMAQ_NO_SUDO` | `0` | never prefix sudo (container/root) |
 | `DNSMAQ_ADMIN_PASSWORD` | random | first-run admin password |

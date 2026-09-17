@@ -39,6 +39,11 @@ HEADER = '# Managed by DNSMAQ-MGR — do not edit; changes are overwritten on ev
 # touching only these files never needs a restart.
 HUP_ONLY = {'hosts.d/managed-hosts', 'dhcp-hosts', 'dhcp-opts'}
 
+# Mirror SECTION names are not all store names: 'hosts' is the hosts list
+# inside the dns store. apply_change bumps the serial of the store a section
+# maps to (falling back to the section name itself for the store-named ones).
+SECTION_STORE = {'hosts': 'dns'}
+
 # ICANN DNSSEC root trust anchors (KSK-2017 and KSK-2024).
 TRUST_ANCHORS = [
     '.,20326,8,2,E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D',
@@ -249,19 +254,52 @@ def blocklist_domains_path(list_id):
     return os.path.join(BLOCKLISTS_DIR, '%s.domains' % list_id)
 
 
-def render_blocklist(rec):
-    """One conf file per subscribed list, from its fetched domains file.
-    Domains are validated at fetch time; RE_DOMAIN is re-checked here so a
-    tampered domains file still can't smuggle directives into the config."""
-    lines = [HEADER, '# Blocklist: %s (%s)' % (rec.get('name', ''), rec.get('url', ''))]
+# Rendered address= blocks per domains file, keyed by (mtime_ns, size). A
+# large list is hundreds of thousands of lines; without this every apply
+# (each host edit, each mirror push) re-read and re-validated all of them.
+_BLOCK_CACHE = {}
+_BLOCK_CACHE_LOCK = threading.Lock()
+
+
+def _blocklist_block(path):
+    """The address= lines for one domains file as a single string, or None
+    when the file is missing. Cached by mtime+size; the file is written
+    atomically (os.replace), so a stale read of a half-written file cannot
+    happen and the key fully identifies the content."""
     try:
-        with open(blocklist_domains_path(rec['id'])) as f:
+        st = os.stat(path)
+        key = (st.st_mtime_ns, st.st_size)
+        with _BLOCK_CACHE_LOCK:
+            hit = _BLOCK_CACHE.get(path)
+        if hit and hit[0] == key:
+            return hit[1]
+        lines = []
+        with open(path) as f:
             for raw in f:
                 dom = raw.strip()
                 if dom and RE_DOMAIN.match(dom):
                     lines.append('address=/%s/0.0.0.0' % dom)
     except OSError:
+        with _BLOCK_CACHE_LOCK:
+            _BLOCK_CACHE.pop(path, None)
+        return None
+    block = '\n'.join(lines)
+    with _BLOCK_CACHE_LOCK:
+        _BLOCK_CACHE[path] = (key, block)
+    return block
+
+
+def render_blocklist(rec):
+    """One conf file per subscribed list, from its fetched domains file.
+    Domains are validated at fetch time; RE_DOMAIN is re-checked (in
+    _blocklist_block) so a tampered domains file still can't smuggle
+    directives into the config."""
+    lines = [HEADER, '# Blocklist: %s (%s)' % (rec.get('name', ''), rec.get('url', ''))]
+    block = _blocklist_block(blocklist_domains_path(rec['id']))
+    if block is None:
         lines.append('# (not fetched yet)')
+    elif block:
+        lines.append(block)
     return '\n'.join(lines) + '\n'
 
 
@@ -436,6 +474,7 @@ class ChildController:
     def _spawn(self):
         self._proc = subprocess.Popen(self._args(), stdout=subprocess.PIPE,
                                       stderr=subprocess.STDOUT, text=True)
+        self._spawned_at = time.time()
         threading.Thread(target=self._pump, args=(self._proc,), daemon=True).start()
         threading.Thread(target=self._watch, args=(self._proc,), daemon=True).start()
 
@@ -448,6 +487,10 @@ class ChildController:
         with self._lock:
             if self._stopping or proc is not self._proc:
                 return
+            if time.time() - getattr(self, '_spawned_at', 0) > 60:
+                # It ran for a while before dying: not a crash loop, so do
+                # not inherit the backoff an earlier flap left behind.
+                self._backoff = 1
             self._log.append('%s exited rc=%s — respawning in %ds'
                              % (self.name, proc.returncode, self._backoff))
         time.sleep(self._backoff)
@@ -485,6 +528,9 @@ class ChildController:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                # Reap it: without this poll() still reads "running" for a
+                # moment and start() returns success for a dead child.
+                proc.wait()
         return self.start()
 
     def reload(self):
@@ -504,6 +550,9 @@ class ChildController:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                # Reap it: without this poll() still reads "running" for a
+                # moment and start() returns success for a dead child.
+                proc.wait()
 
     def logs(self, lines=200):
         return '\n'.join(list(self._log)[-int(lines):])
@@ -526,6 +575,18 @@ def dnsmasq_version():
 
 
 # ─── Apply pipeline ────────────────────────────────────────────────────
+
+def note_expected_restart():
+    """Record that the app itself restarted dnsmasq, so the alerts tick can
+    tell a deliberate restart (counters reset) from a crash or respawn."""
+    try:
+        with STORE_LOCK:
+            st = load_store('alerts_state')
+            st['expected_restart_ts'] = int(time.time())
+            save_store('alerts_state', st)
+    except Exception as e:
+        print('could not note expected restart: %s' % e, flush=True)
+
 
 def apply_change(mutate, sections=('settings',), from_mirror=False):
     """The single choke point for every config mutation.
@@ -550,7 +611,7 @@ def apply_change(mutate, sections=('settings',), from_mirror=False):
         pruned = prune_blocklist_confs(rendered)
         if pruned:
             action, changed = 'restart', changed + pruned
-        for n in set(sections) & set(store_names):
+        for n in {SECTION_STORE.get(x, x) for x in sections} & set(store_names):
             data = load_store(n)
             bump_serial(n, data)
         from . import changelog
@@ -564,6 +625,7 @@ def apply_change(mutate, sections=('settings',), from_mirror=False):
     if action == 'reload':
         service_ok, detail = ctl.reload()
     elif action == 'restart':
+        note_expected_restart()
         service_ok, detail = ctl.restart()
     if action != 'none':
         time.sleep(0.5)
@@ -639,12 +701,14 @@ def dnsmasq_apply():
             return err('dnsmasq rejected the configuration: %s' % output, 400)
         write_render(rendered)
         prune_blocklist_confs(rendered)
+    note_expected_restart()
     service_ok, detail = get_controller().restart()
     return jsonify({'success': True, 'service_ok': service_ok, 'service_detail': detail})
 
 
 @bp.route('/api/dnsmasq/restart', methods=['POST'])
 def dnsmasq_restart():
+    note_expected_restart()
     service_ok, detail = get_controller().restart()
     if not service_ok:
         return err('Restart failed: %s' % detail, 500)

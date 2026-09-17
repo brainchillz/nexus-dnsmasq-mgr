@@ -123,7 +123,9 @@ def dns_import():
     locked = locked_error('hosts')
     if locked:
         return locked
-    data = request.get_json() or {}
+    data, e = json_object()
+    if e:
+        return e
     text = str(data.get('text') or '')
     if not text.strip():
         return err('Nothing to import')

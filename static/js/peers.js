@@ -136,8 +136,8 @@ function peerModal(id) {
         <input id="pe-pass" type="password" class="form-control" autocomplete="new-password"></div>
       <div class="form-group"><label>Site</label>
         <input id="pe-site" class="form-control" value="${escapeHtml(p.unifi_site || 'default')}" placeholder="default"></div>
-      <label class="checkitem" style="padding-left:0"><input id="pe-del" type="checkbox" ${p.unifi_delete_extra !== false ? 'checked' : ''}>
-        Remove Static DNS entries not in our host records (full mirror)</label>
+      <label class="checkitem" style="padding-left:0"><input id="pe-del" type="checkbox" ${p.unifi_delete_extra === true ? 'checked' : ''}>
+        Remove Static DNS entries not in our host records (full mirror — off by default; deletes gateway entries this node does not know)</label>
       <label class="checkitem" style="padding-left:0"><input id="pe-claim" type="checkbox" ${p.unifi_claim_client_dns ? 'checked' : ''}>
         Take over names held by a client's Local DNS Record (unticks it; DHCP reservations are kept)</label>
     </div>

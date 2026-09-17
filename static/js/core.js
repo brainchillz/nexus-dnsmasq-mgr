@@ -389,12 +389,18 @@ async function showApp(user, fqdn, role, mustChange) {
   currentUser = user || '';
   if (fqdn) $('sidebar-title').textContent = fqdn;
   $('account-user').textContent = user ? `Signed in as ${user}${currentRole !== 'admin' ? ' · read-only' : ''}` : '';
+  if (mustChange) {
+    // The server refuses everything but the password route until the
+    // first-run password is changed, so do not load a page behind the dialog.
+    $('page-content').innerHTML = '';
+    forcePasswordChange();
+    return;
+  }
   await refreshMirrorStatus();
   // Always-visible role cue in the sidebar so a secondary is obvious on every
   // page the moment you log in — not just the Overview.
   applyRoleSubtitle();
   showPage('overview');
-  if (mustChange) forcePasswordChange();
 }
 
 // First-run: force the bootstrap admin to set a real password before anything else.
@@ -457,7 +463,11 @@ async function doChangePassword(forced) {
     modalLocked = false;
     closeModal();
     alert('Password updated.');
-    if (forced) showPage('overview');
+    if (forced) {
+      await refreshMirrorStatus();
+      applyRoleSubtitle();
+      showPage('overview');
+    }
   } catch (err) { alert(err.message); }
 }
 

@@ -16,7 +16,7 @@ APP_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file
 STATIC_DIR = os.path.join(APP_DIR, 'static')
 TEMPLATES_DIR = os.path.join(APP_DIR, 'templates')
 
-APP_VERSION = '0.4.5'
+APP_VERSION = '0.4.6'
 
 DATA_DIR = os.environ.get('DNSMAQ_DATA_DIR', APP_DIR)
 STATE_DIR = os.path.join(DATA_DIR, 'state')
@@ -82,6 +82,11 @@ WEB_PORT = int(os.environ.get('DNSMAQ_PORT', 8443 if TLS_ENABLED else 8080))
 TLS_DIR = os.environ.get('DNSMAQ_TLS_DIR', os.path.join(DATA_DIR, 'certs'))
 TLS_CERT = os.environ.get('DNSMAQ_TLS_CERT', os.path.join(TLS_DIR, 'dnsmaq-mgr.crt'))
 TLS_KEY = os.environ.get('DNSMAQ_TLS_KEY', os.path.join(TLS_DIR, 'dnsmaq-mgr.key'))
+
+# Reverse proxies whose X-Forwarded-For the login throttle may trust
+# (comma-separated addresses). Unset = the TCP peer address is the client.
+TRUSTED_PROXIES = {x.strip() for x in os.environ.get('DNSMAQ_TRUSTED_PROXY', '').split(',')
+                   if x.strip()}
 
 SESSION_COOKIE_CONFIG = dict(
     SESSION_COOKIE_HTTPONLY=True,

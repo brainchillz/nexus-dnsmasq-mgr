@@ -10,18 +10,45 @@ as a child process; on bare metal the systemd dnsmasq unit is driven via
 sudo instead.
 """
 import sys
+import signal
 
-from dnsmaqmgr import create_app, cli
+from dnsmaqmgr import cli
+
+if __name__ == '__main__':
+    # CLI subcommands run BEFORE the app object exists: `dhcp-probe` is
+    # invoked as root through sudo (environment stripped), and creating the
+    # app would create/chmod the data tree as root in the wrong place.
+    _rc = cli.dispatch(sys.argv)
+    if _rc is not None:
+        sys.exit(_rc)
+
+from dnsmaqmgr import create_app
 from dnsmaqmgr.core import config, auth, tls
 from dnsmaqmgr import dnsmasq, stats, encdns
 
 app = create_app()
 
 
+def _shutdown(signum, _frame):
+    """SIGTERM/SIGINT: stop the supervised children and exit. As PID 1 in a
+    container the default disposition would IGNORE the signal, so `docker
+    stop` waited out its grace period and SIGKILLed dnsmasq."""
+    print('signal %d — stopping supervised children' % signum, flush=True)
+    try:
+        encdns.get_proxy().stop()
+    except Exception:
+        pass
+    if config.SUPERVISE:
+        try:
+            dnsmasq.get_controller().stop()
+        except Exception:
+            pass
+    sys.exit(0)
+
+
 if __name__ == '__main__':
-    _rc = cli.dispatch(sys.argv)
-    if _rc is not None:
-        sys.exit(_rc)
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
     app.secret_key = auth.ensure_bootstrap()['secret_key']
     dnsmasq.ensure_render()
     # Encrypted upstream first: if enabled, dnsmasq's rendered config already

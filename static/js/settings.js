@@ -324,11 +324,17 @@ async function restoreGo(btn) {
 }
 
 async function stSave() {
+  // A blank cache field must not silently become cache-size=0 (caching OFF).
+  const cacheRaw = $('st-cache').value.trim();
+  if (cacheRaw === '' || !/^\d+$/.test(cacheRaw)) {
+    alert('Cache size must be a whole number of entries (0 disables caching).');
+    return;
+  }
   const body = {
     domain: $('st-domain').value.trim(),
     interfaces: $('st-ifaces').value.split('\n').map(x => x.trim()).filter(Boolean),
     listen_addresses: $('st-addrs').value.split('\n').map(x => x.trim()).filter(Boolean),
-    cache_size: parseInt($('st-cache').value) || 0,
+    cache_size: parseInt(cacheRaw, 10),
     expand_hosts: $('st-expand').checked,
     bind_interfaces: $('st-bind').checked,
     no_resolv: $('st-noresolv').checked,

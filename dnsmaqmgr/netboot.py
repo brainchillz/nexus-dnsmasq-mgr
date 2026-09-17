@@ -57,23 +57,29 @@ def netboot_settings():
     data, e = json_object()
     if e:
         return e
-    nb = load_store('netboot')
+    delta = {}
     if 'proxy_dhcp' in data:
-        nb['proxy_dhcp'] = bool(data['proxy_dhcp'])
+        delta['proxy_dhcp'] = bool(data['proxy_dhcp'])
     if 'proxy_subnet' in data:
         subnet = (data['proxy_subnet'] or '').strip()
         if subnet and not is_ipv4(subnet):
             return err('Proxy subnet must be an IPv4 network address (e.g. 10.0.0.0)')
-        nb['proxy_subnet'] = subnet
+        delta['proxy_subnet'] = subnet
     if 'pxe_prompt' in data:
         prompt = str(data['pxe_prompt'] or '')
         if not RE_COMMENT.match(prompt):
             return err('Invalid PXE prompt')
-        nb['pxe_prompt'] = prompt
-    if nb.get('proxy_dhcp') and not nb.get('proxy_subnet'):
+        delta['pxe_prompt'] = prompt
+    merged = {**load_store('netboot'), **delta}
+    if merged.get('proxy_dhcp') and not merged.get('proxy_subnet'):
         return err('Proxy-DHCP needs a subnet')
 
-    res = apply_change(lambda: save_store('netboot', nb), sections=['netboot'])
+    def mutate():
+        nb = load_store('netboot')      # fresh inside the lock
+        nb.update(delta)
+        save_store('netboot', nb)
+
+    res = apply_change(mutate, sections=['netboot'])
     if isinstance(res, tuple):
         return res
     return jsonify({'success': True, **res})

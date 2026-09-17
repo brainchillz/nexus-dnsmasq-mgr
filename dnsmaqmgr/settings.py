@@ -5,6 +5,7 @@ from .core.runcmd import err, json_object
 from .core.store import load_store, save_store
 from .core.validators import (RE_DOMAIN, RE_IFACE, is_ip, is_upstream)
 from .dnsmasq import apply_change
+from .mirror import locked_error
 
 bp = Blueprint('settings', __name__)
 
@@ -101,6 +102,12 @@ def settings_save():
     delta, verr = _validated(data)
     if verr:
         return err(verr)
+    if 'upstreams' in delta:
+        # Upstreams ride in the mirrored 'dns' section: when that section is
+        # fed by a source, they are the source's to set.
+        locked = locked_error('dns')
+        if locked:
+            return locked
 
     # Merge onto a store loaded INSIDE the write lock, so a concurrent save
     # (or a mirror push) is not clobbered by a stale read-modify-write.

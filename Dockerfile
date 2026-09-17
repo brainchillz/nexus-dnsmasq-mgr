@@ -6,8 +6,12 @@ FROM debian:trixie-slim
 # as a child process); Python needs are trivial, so debian-slim beats python:*.
 # dnscrypt-proxy backs the opt-in encrypted DNS upstream — also supervised by
 # the app.
+# iputils-ping + iproute2: the Network Scan sweep and the DHCP-conflict
+# probe's own-address filter shell out to `ping` and `ip`, which the slim
+# base image does not carry.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        dnsmasq dnscrypt-proxy python3 python3-venv openssl ca-certificates \
+        dnsmasq dnscrypt-proxy iputils-ping iproute2 \
+        python3 python3-venv openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /opt/dnsmaq-mgr/requirements.txt
@@ -27,7 +31,7 @@ ENV DNSMAQ_DATA_DIR=/data \
     DNSMAQ_SUPERVISE=1 \
     DNSMAQ_NO_SUDO=1
 
-EXPOSE 8443/tcp 53/tcp 53/udp 67/udp 69/udp
+EXPOSE 8443/tcp 53/tcp 53/udp 67/udp
 VOLUME /data
 WORKDIR /opt/dnsmaq-mgr
 

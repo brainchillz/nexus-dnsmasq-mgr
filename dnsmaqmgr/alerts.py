@@ -29,6 +29,7 @@ from datetime import datetime
 from flask import Blueprint, jsonify
 
 from .core.auth import _is_admin
+from .core.config import TICK_SECONDS
 from .core.runcmd import err, json_object
 from .core.store import STORE_LOCK, load_store, save_store
 from .core.tls import cert_info
@@ -49,6 +50,10 @@ COOLDOWNS = {'service_down': 6 * 3600, 'cert_expiry': 24 * 3600,
 # by digest prefix, so this matches every 'shadowed:<digest>' key.
 COOLDOWN_PREFIXES = {'shadowed:': 24 * 3600}
 DEFAULT_COOLDOWN = 6 * 3600
+
+# A counter reset this soon after the app restarted dnsmasq itself (an
+# apply, the Restart button) is the restart we asked for, not an outage.
+EXPECTED_RESTART_GRACE = 2 * TICK_SECONDS
 
 
 # ─── Delivery ─────────────────────────────────────────────────────────
@@ -137,10 +142,12 @@ def _check_service(state, settings):
             total = vals['hits'] + vals['misses'] + vals['insertions']
             last = state.get('counter_sum')
             if last is not None and total < last:
-                found.append(('service_restart', 'service_down',
-                              'dnsmasq restarted',
-                              'dnsmasq counters reset — the daemon restarted '
-                              'or respawned since the last check'))
+                expected = int(state.get('expected_restart_ts') or 0)
+                if time.time() - expected > EXPECTED_RESTART_GRACE:
+                    found.append(('service_restart', 'service_down',
+                                  'dnsmasq restarted',
+                                  'dnsmasq counters reset — the daemon restarted '
+                                  'or respawned since the last check'))
             state['counter_sum'] = total
     return found
 
@@ -245,26 +252,35 @@ def tick():
         statics = {s['mac'] for s in load_store('dhcp').get('static_leases', [])}
         settings = load_store('settings')
 
-        events_cfg = cfg.get('events') or {}
-        candidates = []
-        if events_cfg.get('new_device', True):
-            candidates += _check_new_devices(state, leases, statics)
-        if events_cfg.get('pool_high', True):
-            candidates += _check_pools(cfg, state, leases)
-        if events_cfg.get('service_down', True):
-            candidates += _check_service(state, settings)
-        if events_cfg.get('cert_expiry', True):
-            candidates += _check_cert(cfg)
-        if events_cfg.get('encdns_down', True):
-            candidates += _check_encdns()
-        if events_cfg.get('shadowed_record', True):
-            candidates += _check_shadowing()
+    # The checks probe the network (CHAOS queries, the encdns test query,
+    # file scans) and can take seconds — run them OUTSIDE the store lock so
+    # a tick never stalls an apply or a mirror push.
+    events_cfg = cfg.get('events') or {}
+    candidates = []
+    if events_cfg.get('new_device', True):
+        candidates += _check_new_devices(state, leases, statics)
+    if events_cfg.get('pool_high', True):
+        candidates += _check_pools(cfg, state, leases)
+    if events_cfg.get('service_down', True):
+        candidates += _check_service(state, settings)
+    if events_cfg.get('cert_expiry', True):
+        candidates += _check_cert(cfg)
+    if events_cfg.get('encdns_down', True):
+        candidates += _check_encdns()
+    if events_cfg.get('shadowed_record', True):
+        candidates += _check_shadowing()
 
-        now = int(time.time())
-        last_sent = state.get('last_sent', {})
-        due = [(k, ev, t, m) for (k, ev, t, m) in candidates
-               if now - int(last_sent.get(k, 0)) >= _cooldown(k)]
-        save_store('alerts_state', state)   # baseline/hysteresis even if nothing due
+    now = int(time.time())
+    last_sent = state.get('last_sent', {})
+    due = [(k, ev, t, m) for (k, ev, t, m) in candidates
+           if now - int(last_sent.get(k, 0)) >= _cooldown(k)]
+    with STORE_LOCK:
+        # Merge only the keys the checks own; expected_restart_ts and
+        # last_sent may have been written meanwhile by an apply.
+        fresh = load_store('alerts_state')
+        for k in ('baseline_done', 'known_macs', 'alerted_pools', 'counter_sum'):
+            fresh[k] = state.get(k)
+        save_store('alerts_state', fresh)   # baseline/hysteresis even if nothing due
 
     for key, event, title, message in due:
         ok, detail = deliver(cfg, event, title, message)
